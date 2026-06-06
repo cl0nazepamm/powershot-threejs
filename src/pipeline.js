@@ -180,12 +180,16 @@ function stWhiteBalance(tex, ctx) {
 
 function stBlackLevel(tex, ctx) {
   const b = texture(tex, screenUV).r;
+  return vec3(blackLevelValue(b, ctx));
+}
+
+function blackLevelValue(b, ctx) {
   const ph = bayerPhase(screenUV, ctx);
   const off = ctx.P.blR.mul(ph.isR)
     .add(ctx.P.blGr.mul(ph.isGr))
     .add(ctx.P.blGb.mul(ph.isGb))
     .add(ctx.P.blB.mul(ph.isB));
-  return vec3(b.add(off).clamp(0.0, LEVELS));
+  return b.add(off).clamp(0.0, LEVELS);
 }
 
 function samePhase3x3(tex, ctx) {
@@ -205,6 +209,10 @@ function samePhase3x3(tex, ctx) {
 
 function stBayerNoise(tex, ctx) {
   const b = texture(tex, screenUV).r;
+  return vec3(bayerNoiseValue(b, ctx));
+}
+
+function bayerNoiseValue(b, ctx) {
   const p = floor(screenUV.mul(ctx.resolution));
   const t = ctx.frame;
   const ns = ctx.noiseScale;
@@ -226,7 +234,12 @@ function stBayerNoise(tex, ctx) {
 
   sig = sig.add(read).add(shot);
 
-  return vec3(sig.clamp(0.0, LEVELS));
+  return sig.clamp(0.0, LEVELS);
+}
+
+function stBlackLevelNoise(tex, ctx) {
+  const b = blackLevelValue(texture(tex, screenUV).r, ctx);
+  return vec3(bayerNoiseValue(b, ctx));
 }
 
 // Remove isolated Bayer-domain hot/dead samples before they demosaic into
@@ -384,7 +397,10 @@ function stChromaDenoise(tex, ctx) {
 // --- RGB ISP ---
 
 function stCCM(tex, ctx) {
-  const c = texture(tex, screenUV).rgb;
+  return ccmColor(texture(tex, screenUV).rgb, ctx);
+}
+
+function ccmColor(c, ctx) {
   const r = dot(c, ctx.P.ccm0);
   const g = dot(c, ctx.P.ccm1);
   const b = dot(c, ctx.P.ccm2);
@@ -392,7 +408,10 @@ function stCCM(tex, ctx) {
 }
 
 function stTone(tex, ctx) {
-  let c = texture(tex, screenUV).rgb;
+  return toneColor(texture(tex, screenUV).rgb, ctx);
+}
+
+function toneColor(c, ctx) {
   c = min(c, ctx.P.hiClip);
   c = c.div(ctx.P.hiClip).mul(LEVELS);
   c = c.div(LEVELS).clamp(0.0, 1.0).pow(ctx.P.gamma).mul(LEVELS);
@@ -402,13 +421,19 @@ function stTone(tex, ctx) {
 }
 
 function stSaturation(tex, ctx) {
-  const c = texture(tex, screenUV).rgb;
+  return saturationColor(texture(tex, screenUV).rgb, ctx);
+}
+
+function saturationColor(c, ctx) {
   const gray = c.r.add(c.g).add(c.b).div(3.0);
   return mix(vec3(gray), c, ctx.P.sat).clamp(0.0, LEVELS);
 }
 
 function stVignette(tex, ctx) {
-  const c = texture(tex, screenUV).rgb;
+  return vignetteColor(texture(tex, screenUV).rgb, ctx);
+}
+
+function vignetteColor(c, ctx) {
   const res = ctx.resolution;
   const cxy = res.mul(0.5);
   const pos = screenUV.mul(res);
@@ -418,6 +443,15 @@ function stVignette(tex, ctx) {
   const cosT = cos(r.mul(0.7853982)); // r * pi/4
   const falloff = float(1.0).sub(ctx.P.vignette.mul(cosT.pow(4.0).oneMinus()));
   return c.mul(falloff).clamp(0.0, LEVELS);
+}
+
+function stRgbPointStack(tex, ctx, ids) {
+  let c = texture(tex, screenUV).rgb;
+  if (ids.has("ccm")) c = ccmColor(c, ctx);
+  if (ids.has("tone")) c = toneColor(c, ctx);
+  if (ids.has("saturation")) c = saturationColor(c, ctx);
+  if (ids.has("vignette")) c = vignetteColor(c, ctx);
+  return c;
 }
 
 function stEdgeEnhance(tex, ctx) {
@@ -503,8 +537,10 @@ function jpegAmount(ctx) {
 
 function jpegHighlightAmount(original, ctx) {
   const luma = dot(original, LUMA).div(LEVELS).clamp(0.0, 1.0);
-  const highlight = luma.sub(0.46).div(0.32).clamp(0.0, 1.0).pow(0.75).mul(1.4).clamp(0.0, 1.0);
-  return jpegAmount(ctx).mul(highlight);
+  const midtoneLift = luma.sub(0.18).div(0.36).clamp(0.0, 1.0).mul(0.18);
+  const highlight = luma.sub(0.30).div(0.55).clamp(0.0, 1.0).pow(1.25);
+  const mask = max(midtoneLift, highlight).clamp(0.0, 1.0);
+  return jpegAmount(ctx).mul(mask);
 }
 
 const JPEG_LUMA_Q = [
@@ -636,6 +672,8 @@ export const STAGE_DEFS = [
   { id: "edge", label: "Edge enhancement", make: stEdgeEnhance },
   { id: "jpeg", label: "JPEG DCT compression", multi: [stJpegDctRows, stJpegDctColsQuant, stJpegIdct] },
 ];
+
+const RGB_POINT_STAGE_IDS = new Set(["ccm", "tone", "saturation", "vignette"]);
 
 // ---------------------------------------------------------------------------
 // uniforms built per preset (so we can hot-swap without rebuilding nodes)
@@ -793,11 +831,36 @@ export class Pipeline {
     // mandatory input + downsample pass: 0..1 source -> 0..255 in rtA.
     this.steps.push({ material: this._mat(stInput(this.source, this.ctx)), target: this.rtA });
 
+    const appendSingle = (make) => {
+      this.steps.push({ material: this._mat(make(read.texture, this.ctx)), target: write });
+      const tmp = read; read = write; write = tmp;
+    };
+
     // ping-pong the active stages across rtA/rtB with baked input textures
     let read = this.rtA;
     let write = this.rtB;
     const active = STAGE_DEFS.filter((s) => this.enabled.has(s.id));
-    for (const stage of active) {
+    for (let i = 0; i < active.length; i += 1) {
+      const stage = active[i];
+      if (stage.id === "blacklevel" && active[i + 1]?.id === "noise") {
+        appendSingle(stBlackLevelNoise);
+        i += 1;
+        continue;
+      }
+      if (RGB_POINT_STAGE_IDS.has(stage.id)) {
+        const ids = [];
+        let j = i;
+        while (j < active.length && RGB_POINT_STAGE_IDS.has(active[j].id)) {
+          ids.push(active[j].id);
+          j += 1;
+        }
+        if (ids.length > 1) {
+          const idSet = new Set(ids);
+          appendSingle((tex, ctx) => stRgbPointStack(tex, ctx, idSet));
+          i = j - 1;
+          continue;
+        }
+      }
       const makers = stage.multi || [stage.make];
       let originalTex = read.texture;
       if (stage.multi) {
