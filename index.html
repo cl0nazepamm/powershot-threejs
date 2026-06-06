@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PowerSHOT · WebGPU realtime ISP</title>
+<link rel="stylesheet" href="./src/styles.css">
+</head>
+<body>
+  <div id="stage"><canvas id="view"></canvas></div>
+  <div id="panel">
+    <h1>PowerSHOT<small>realtime ISP · WebGPU / TSL</small></h1>
+
+    <div>
+      <label for="preset">Camera preset</label>
+      <select id="preset"></select>
+    </div>
+
+    <div>
+      <label for="lens">Lens softness · <span id="lensval">0.28</span></label>
+      <input id="lens" type="range" min="0" max="300" value="28">
+    </div>
+
+    <div>
+      <label for="bloom">CCD bloom · <span id="bloomval">0.40</span></label>
+      <input id="bloom" type="range" min="0" max="300" value="40">
+    </div>
+
+    <div>
+      <label for="noise">Noise amount · <span id="noiseval">0.35</span></label>
+      <input id="noise" type="range" min="0" max="300" value="35">
+    </div>
+
+    <div>
+      <label for="bayernr">Bayer NR · <span id="bayernrval">0.60</span></label>
+      <input id="bayernr" type="range" min="0" max="300" value="60">
+    </div>
+
+    <div>
+      <label for="chroma">Chroma NR · <span id="chromaval">1.00</span></label>
+      <input id="chroma" type="range" min="0" max="300" value="100">
+    </div>
+
+    <div>
+      <label for="jpeg">JPEG DCT · <span id="jpegval">1.00</span></label>
+      <input id="jpeg" type="range" min="0" max="300" value="100">
+    </div>
+
+    <div id="drop">drop an image here<br>(or click to choose)</div>
+    <input id="file" type="file" accept="image/*" hidden>
+
+    <div>
+      <label>Pipeline stages</label>
+      <div class="stages" id="stages"></div>
+    </div>
+
+    <button id="reset-stages">enable all stages</button>
+    <div id="status">booting...</div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

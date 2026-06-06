@@ -1,0 +1,19 @@
+{
+  "name": "powershot-threejs",
+  "version": "0.1.0",
+  "private": true,
+  "homepage": "https://cl0nazepamm.github.io/powershot-threejs/",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "check": "node --check src/main.js && node --check src/pipeline.js && node --check src/presets.js"
+  },
+  "devDependencies": {
+    "vite": "^8.0.16"
+  },
+  "dependencies": {
+    "three": "^0.184.0"
+  }
+}
