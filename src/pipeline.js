@@ -226,13 +226,6 @@ function stBayerNoise(tex, ctx) {
 
   sig = sig.add(read).add(shot);
 
-  // hot pixels: rare stuck-bright defects (fixed). Bilinear demosaic spreads a
-  // single hot Bayer sample into a colored "+", so keep them genuinely sparse.
-  const hp = hash12(p.add(vec2(91.7, 43.1)));
-  const hotAmp = float(35.0).add(hash12(p.add(vec2(13.3, 81.9))).mul(55.0));
-  const hot = step(hp, ctx.P.hotRate.mul(0.12)).mul(hotAmp);
-  sig = sig.add(hot);
-
   return vec3(sig.clamp(0.0, LEVELS));
 }
 
@@ -508,6 +501,12 @@ function jpegAmount(ctx) {
   return ctx.P.jpegStrength.clamp(0.0, 1.0);
 }
 
+function jpegHighlightAmount(original, ctx) {
+  const luma = dot(original, LUMA).div(LEVELS).clamp(0.0, 1.0);
+  const highlight = luma.sub(0.46).div(0.32).clamp(0.0, 1.0).pow(0.75).mul(1.4).clamp(0.0, 1.0);
+  return jpegAmount(ctx).mul(highlight);
+}
+
 const JPEG_LUMA_Q = [
   [16, 11, 10, 16, 24, 40, 51, 61],
   [12, 12, 14, 19, 26, 58, 60, 55],
@@ -598,12 +597,18 @@ function stJpegIdct(tex, ctx, originalTex) {
   }
   const original = samplePixel(originalTex, ctx, p);
   const decoded = yCbCrToRgb(sum.add(vec3(128.0, 0.0, 0.0))).clamp(0.0, LEVELS);
-  return mix(original, decoded, jpegAmount(ctx)).clamp(0.0, LEVELS);
+  return mix(original, decoded, jpegHighlightAmount(original, ctx)).clamp(0.0, LEVELS);
 }
 
 // final: bring 0..255 back to 0..1 for display
 function stOutput(tex, ctx) {
   return texture(tex, screenUV).rgb.div(LEVELS);
+}
+
+function powershotOutputAlpha(sourceSample, finalColor) {
+  const effectDelta = dot(abs(finalColor.sub(sourceSample.rgb)), LUMA);
+  const effectAlpha = step(0.025, effectDelta);
+  return max(sourceSample.a, effectAlpha);
 }
 
 // ---------------------------------------------------------------------------
@@ -681,8 +686,9 @@ export function applyPreset(ctx, preset) {
   P.blGb.value = preset.black_level[2];
   P.blB.value = preset.black_level[3];
   P.noise.value = preset.noise_intensity;
-  P.colorNoise.value = preset.color_noise_intensity;
-  P.hotRate.value = preset.hot_pixel_rate;
+  // Suppress chroma speckles and hot pixels; they read as colored fireflies in motion.
+  P.colorNoise.value = 0;
+  P.hotRate.value = 0;
   P.colFpn.value = preset.column_fpn;
   P.rowFpn.value = preset.row_fpn;
   P.prnu.value = preset.prnu;
@@ -805,7 +811,11 @@ export class Pipeline {
     }
 
     const finalTex = this.steps[this.steps.length - 1].target.texture;
-    this.outputMat = this._mat(stOutput(finalTex, this.ctx));
+    const sourceSample = texture(this.source, screenUV);
+    const finalColor = stOutput(finalTex, this.ctx);
+    this.outputMat = this._mat(vec4(finalColor, powershotOutputAlpha(sourceSample, finalColor)));
+    this.outputMat.transparent = true;
+    this.outputMat.blending = THREE.NoBlending;
   }
 
   // run the chain and present to screen
