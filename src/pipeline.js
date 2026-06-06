@@ -608,7 +608,7 @@ function stOutput(tex, ctx) {
 function powershotOutputAlpha(sourceSample, finalColor) {
   const effectDelta = dot(abs(finalColor.sub(sourceSample.rgb)), LUMA);
   const effectAlpha = step(0.025, effectDelta);
-  return max(sourceSample.a, effectAlpha);
+  return max(step(0.001, sourceSample.a), effectAlpha);
 }
 
 // ---------------------------------------------------------------------------
