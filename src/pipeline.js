@@ -452,18 +452,18 @@ function quantize(v, q) {
   return floor(v.div(q).add(0.5)).mul(q);
 }
 
-function rgbToYCoCg(c) {
-  const y = c.r.mul(0.25).add(c.g.mul(0.5)).add(c.b.mul(0.25));
-  const co = c.r.sub(c.b).mul(0.5);
-  const cg = c.g.mul(0.5).sub(c.r.add(c.b).mul(0.25));
-  return vec3(y, co, cg);
+function rgbToYCbCr(c) {
+  const y = c.r.mul(0.299).add(c.g.mul(0.587)).add(c.b.mul(0.114));
+  const cb = c.r.mul(-0.168736).add(c.g.mul(-0.331264)).add(c.b.mul(0.5));
+  const cr = c.r.mul(0.5).add(c.g.mul(-0.418688)).add(c.b.mul(-0.081312));
+  return vec3(y, cb, cr);
 }
 
-function ycocgToRgb(c) {
+function yCbCrToRgb(c) {
   return vec3(
-    c.x.add(c.y).sub(c.z),
-    c.x.add(c.z),
-    c.x.sub(c.y).sub(c.z),
+    c.x.add(c.z.mul(1.402)),
+    c.x.sub(c.y.mul(0.344136)).sub(c.z.mul(0.714136)),
+    c.x.add(c.y.mul(1.772)),
   );
 }
 
@@ -486,15 +486,15 @@ function jpegChroma420(tex, ctx, p) {
   const uv10 = min(chromaBase.add(vec2(1.5, 0.5)), ctx.resolution.sub(0.5)).div(ctx.resolution);
   const uv01 = min(chromaBase.add(vec2(0.5, 1.5)), ctx.resolution.sub(0.5)).div(ctx.resolution);
   const uv11 = min(chromaBase.add(vec2(1.5, 1.5)), ctx.resolution.sub(0.5)).div(ctx.resolution);
-  const c00 = rgbToYCoCg(texture(tex, uv00).rgb);
-  const c10 = rgbToYCoCg(texture(tex, uv10).rgb);
-  const c01 = rgbToYCoCg(texture(tex, uv01).rgb);
-  const c11 = rgbToYCoCg(texture(tex, uv11).rgb);
+  const c00 = rgbToYCbCr(texture(tex, uv00).rgb);
+  const c10 = rgbToYCbCr(texture(tex, uv10).rgb);
+  const c01 = rgbToYCbCr(texture(tex, uv01).rgb);
+  const c11 = rgbToYCbCr(texture(tex, uv11).rgb);
   return c00.add(c10).add(c01).add(c11).mul(0.25).yz;
 }
 
 function jpegInput(tex, ctx, p) {
-  const c = rgbToYCoCg(samplePixel(tex, ctx, p));
+  const c = rgbToYCbCr(samplePixel(tex, ctx, p));
   const chroma = mix(c.yz, jpegChroma420(tex, ctx, p), ctx.P.jpegChroma420.mul(ctx.P.jpegStrength).clamp(0.0, 1.0));
   return vec3(c.x.sub(128.0), chroma.x, chroma.y);
 }
@@ -505,27 +505,56 @@ function sampleDct(tex, ctx, p) {
 }
 
 function jpegAmount(ctx) {
-  return ctx.P.jpegStrength.mul(0.22).clamp(0.0, 1.0);
+  return ctx.P.jpegStrength.clamp(0.0, 1.0);
+}
+
+const JPEG_LUMA_Q = [
+  [16, 11, 10, 16, 24, 40, 51, 61],
+  [12, 12, 14, 19, 26, 58, 60, 55],
+  [14, 13, 16, 24, 40, 57, 69, 56],
+  [14, 17, 22, 29, 51, 87, 80, 62],
+  [18, 22, 37, 56, 68, 109, 103, 77],
+  [24, 35, 55, 64, 81, 104, 113, 92],
+  [49, 64, 78, 87, 103, 121, 120, 101],
+  [72, 92, 95, 98, 112, 100, 103, 99],
+];
+
+const JPEG_CHROMA_Q = [
+  [17, 18, 24, 47, 99, 99, 99, 99],
+  [18, 21, 26, 66, 99, 99, 99, 99],
+  [24, 26, 56, 99, 99, 99, 99, 99],
+  [47, 66, 99, 99, 99, 99, 99, 99],
+  [99, 99, 99, 99, 99, 99, 99, 99],
+  [99, 99, 99, 99, 99, 99, 99, 99],
+  [99, 99, 99, 99, 99, 99, 99, 99],
+  [99, 99, 99, 99, 99, 99, 99, 99],
+];
+
+function axisMask(value, index) {
+  return float(1.0).sub(step(0.5, abs(value.sub(index))));
+}
+
+function jpegTableAt(table, u, v) {
+  let q = float(0.0);
+  for (let y = 0; y < 8; y += 1) {
+    const my = axisMask(v, y);
+    for (let x = 0; x < 8; x += 1) {
+      q = q.add(axisMask(u, x).mul(my).mul(table[y][x]));
+    }
+  }
+  return q;
 }
 
 function jpegQuantStep(ctx, u, v) {
-  const freq = u.mul(u).add(v.mul(v));
-  const base = float(101.0).sub(ctx.P.jpegQuality).mul(ctx.P.jpegStrength).mul(0.012).add(0.01);
-  return vec3(
-    base.mul(float(0.50).add(freq.mul(0.045))),
-    base.mul(float(1.40).add(freq.mul(0.080))),
-    base.mul(float(1.40).add(freq.mul(0.080))),
-  );
-}
-
-function jpegTemporalDither(ctx, block, u, v, q) {
-  const t = floor(ctx.frame.mul(0.20));
-  const seed = vec3(block.x.add(u.mul(17.0)), block.y.add(v.mul(29.0)), t);
-  const n0 = hash13(seed).sub(0.5);
-  const n1 = hash13(seed.add(vec3(11.0, 7.0, 3.0))).sub(0.5);
-  const n2 = hash13(seed.add(vec3(23.0, 19.0, 5.0))).sub(0.5);
-  const amp = ctx.P.jpegStrength.mul(0.18).clamp(0.0, 0.45);
-  return vec3(n0, n1, n2).mul(q).mul(amp);
+  const quality = ctx.P.jpegQuality.clamp(1.0, 100.0);
+  const lowScale = float(5000.0).div(quality);
+  const highScale = float(200.0).sub(quality.mul(2.0));
+  const qualityScale = mix(lowScale, highScale, step(50.0, quality));
+  const strength = max(ctx.P.jpegStrength, float(0.01));
+  const scale = qualityScale.mul(0.01).mul(strength);
+  const yQ = jpegTableAt(JPEG_LUMA_Q, u, v).mul(scale).clamp(1.0, 255.0);
+  const cQ = jpegTableAt(JPEG_CHROMA_Q, u, v).mul(scale).clamp(1.0, 255.0);
+  return vec3(yQ, cQ, cQ);
 }
 
 function stJpegDctRows(tex, ctx) {
@@ -552,7 +581,7 @@ function stJpegDctColsQuant(tex, ctx) {
   }
   const coeff = sum.mul(dctNorm1D(v));
   const q = jpegQuantStep(ctx, u, v);
-  return quantize(coeff.add(jpegTemporalDither(ctx, block, u, v, q)), q);
+  return quantize(coeff, q);
 }
 
 function stJpegIdct(tex, ctx, originalTex) {
@@ -568,7 +597,7 @@ function stJpegIdct(tex, ctx, originalTex) {
     }
   }
   const original = samplePixel(originalTex, ctx, p);
-  const decoded = ycocgToRgb(sum.add(vec3(128.0, 0.0, 0.0))).clamp(0.0, LEVELS);
+  const decoded = yCbCrToRgb(sum.add(vec3(128.0, 0.0, 0.0))).clamp(0.0, LEVELS);
   return mix(original, decoded, jpegAmount(ctx)).clamp(0.0, LEVELS);
 }
 
