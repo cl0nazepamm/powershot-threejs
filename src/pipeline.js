@@ -15,6 +15,7 @@ import * as THREE from "three/webgpu";
 import {
   vec2, vec3, vec4, float, uniform, texture, screenUV,
   mix, clamp, max, min, dot, abs, floor, fract, sin, cos, sqrt, log, mod, step,
+  exp,
 } from "three/tsl";
 
 const LEVELS = 255.0;
@@ -216,11 +217,9 @@ function stBayerNoise(tex, ctx) {
 
   let sig = b.add(colFpn).add(rowFpn).add(dsnu).mul(prnuGain);
 
-  // signal-dependent read + shot noise (temporal — shimmers each frame).
-  // Keep the shadow boost mild: a steep dark-area multiplier is what turns
-  // shadows into colored static once demosaiced.
+  // signal-dependent read + shot noise (temporal): same curve as PowerShot.py.
   const sl = sig.div(LEVELS).clamp(0.0, 1.0);
-  const readStd = ctx.P.noise.mul(LEVELS).mul(float(0.8).add(sl.oneMinus().mul(0.7)));
+  const readStd = ctx.P.noise.mul(LEVELS).mul(float(0.9).add(sl.oneMinus().mul(1.8)));
   const read = gaussTemporal(p, t, 0.0).mul(readStd).mul(ns);
   const shotStd = sqrt(sl.add(1e-4)).mul(ctx.P.colorNoise.mul(LEVELS));
   const shot = gaussTemporal(p, t, 37.0).mul(shotStd).mul(ns);
@@ -230,7 +229,8 @@ function stBayerNoise(tex, ctx) {
   // hot pixels: rare stuck-bright defects (fixed). Bilinear demosaic spreads a
   // single hot Bayer sample into a colored "+", so keep them genuinely sparse.
   const hp = hash12(p.add(vec2(91.7, 43.1)));
-  const hot = step(hp, ctx.P.hotRate.mul(0.15)).mul(45.0);
+  const hotAmp = float(35.0).add(hash12(p.add(vec2(13.3, 81.9))).mul(55.0));
+  const hot = step(hp, ctx.P.hotRate.mul(0.12)).mul(hotAmp);
   sig = sig.add(hot);
 
   return vec3(sig.clamp(0.0, LEVELS));
@@ -252,10 +252,31 @@ function stAAF(tex, ctx) {
   return vec3(mix(n.c, filtered, s));
 }
 
-function bnrTap(tex, ctx, center, dx, dy, spatialW) {
+function greenGuideAt(tex, ctx, uvN) {
+  const t = ctx.texel;
+  const b = texture(tex, uvN).r;
+  const guide = b.mul(0.50)
+    .add(tapPx(tex, uvN, t, 0, -2).r.mul(-0.125))
+    .add(tapPx(tex, uvN, t, 0, -1).r.mul(0.25))
+    .add(tapPx(tex, uvN, t, -2, 0).r.mul(-0.125))
+    .add(tapPx(tex, uvN, t, -1, 0).r.mul(0.25))
+    .add(tapPx(tex, uvN, t, 1, 0).r.mul(0.25))
+    .add(tapPx(tex, uvN, t, 2, 0).r.mul(-0.125))
+    .add(tapPx(tex, uvN, t, 0, 1).r.mul(0.25))
+    .add(tapPx(tex, uvN, t, 0, 2).r.mul(-0.125));
+  const ph = bayerPhase(uvN, ctx);
+  const isGreen = ph.isGr.add(ph.isGb);
+  return mix(guide, b, isGreen);
+}
+
+function bnrTap(tex, ctx, centerGuide, dx, dy, spatialW) {
+  const uv = screenUV.add(ctx.texel.mul(vec2(dx, dy)));
   const n = tapPx(tex, screenUV, ctx.texel, dx, dy).r;
-  const close = float(1.0).sub(step(ctx.P.bnrRange, abs(n.sub(center))));
-  const w = close.mul(spatialW);
+  const guide = greenGuideAt(tex, ctx, uv);
+  const diff = guide.sub(centerGuide);
+  const rangeSigma = max(ctx.P.bnrRange, float(1e-3));
+  const rangeW = exp(diff.mul(diff).div(rangeSigma.mul(rangeSigma).mul(-2.0)));
+  const w = rangeW.mul(spatialW);
   return { sum: n.mul(w), w };
 }
 
@@ -265,15 +286,21 @@ function bnrTap(tex, ctx, center, dx, dy, spatialW) {
 function stBayerDenoise(tex, ctx) {
   const strength = ctx.P.bayerNR;
   const c = texture(tex, screenUV).r;
+  const centerGuide = greenGuideAt(tex, ctx, screenUV);
+  const spatialSigma = max(ctx.P.bnrSpatial, float(1e-3));
   let sum = c;
   let wsum = float(1.0);
 
-  for (const [dx, dy, w] of [
-    [-2, -2, 0.50], [0, -2, 0.75], [2, -2, 0.50],
-    [-2, 0, 0.75],                  [2, 0, 0.75],
-    [-2, 2, 0.50],  [0, 2, 0.75],  [2, 2, 0.50],
+  for (const [sx, sy] of [
+    [-2, -2], [-1, -2], [0, -2], [1, -2], [2, -2],
+    [-2, -1], [-1, -1], [0, -1], [1, -1], [2, -1],
+    [-2, 0], [-1, 0],            [1, 0], [2, 0],
+    [-2, 1], [-1, 1], [0, 1], [1, 1], [2, 1],
+    [-2, 2], [-1, 2], [0, 2], [1, 2], [2, 2],
   ]) {
-    const tap = bnrTap(tex, ctx, c, dx, dy, w);
+    const dist2 = float(sx * sx + sy * sy);
+    const spatialW = exp(dist2.div(spatialSigma.mul(spatialSigma).mul(-2.0)));
+    const tap = bnrTap(tex, ctx, centerGuide, sx * 2, sy * 2, spatialW);
     sum = sum.add(tap.sum);
     wsum = wsum.add(tap.w);
   }
@@ -560,9 +587,9 @@ export const STAGE_DEFS = [
   { id: "lens", label: "Lens PSF softness", make: stLensPsf },
   { id: "ccdbloom", label: "CCD bloom / vertical smear", make: stCcdBloom },
   { id: "mosaic", label: "Bayer mosaic", make: stMosaic },
+  { id: "dpc", label: "Dead pixel correction", make: stDeadPixelCorrection },
   { id: "blacklevel", label: "Black level offset", make: stBlackLevel },
   { id: "noise", label: "CCD sensor noise", make: stBayerNoise },
-  { id: "dpc", label: "Dead pixel correction", make: stDeadPixelCorrection },
   { id: "aaf", label: "Anti-alias filter (OLPF)", make: stAAF },
   { id: "bnr", label: "Bayer noise reduction", make: stBayerDenoise },
   { id: "wb", label: "White balance (Bayer)", make: stWhiteBalance },
@@ -597,7 +624,7 @@ export function makeUniforms() {
       blR: uniform(0), blGr: uniform(0), blGb: uniform(0), blB: uniform(0),
       noise: uniform(0), colorNoise: uniform(0), hotRate: uniform(0),
       colFpn: uniform(0), rowFpn: uniform(0), prnu: uniform(0), dsnu: uniform(0),
-      dpcThreshold: uniform(30), aaf: uniform(0), bayerNR: uniform(0), bnrRange: uniform(25),
+      dpcThreshold: uniform(30), aaf: uniform(0), bayerNR: uniform(0), bnrSpatial: uniform(1.5), bnrRange: uniform(25),
       demosaicSharp: uniform(0.55),
       chromaNR: uniform(1.0),
       ccm0: uniform(new THREE.Vector3(1, 0, 0)),
@@ -634,6 +661,7 @@ export function applyPreset(ctx, preset) {
   P.dpcThreshold.value = preset.dpc_threshold;
   P.aaf.value = preset.aaf_strength;
   P.bayerNR.value = preset.bnr_strength;
+  P.bnrSpatial.value = preset.bnr_spatial_sigma ?? 1.5;
   P.bnrRange.value = preset.bnr_range_sigma;
   P.demosaicSharp.value = preset.demosaic_quality === "malvar" ? 0.85 : 0.55;
   P.ccm0.value.set(...preset.ccm[0]);
