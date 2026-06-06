@@ -156,6 +156,18 @@ select:hover {
   background: linear-gradient(to bottom, #fff, #b4b4b4);
 }
 
+.button-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+button.active {
+  color: #f7f7f7;
+  background: linear-gradient(to bottom, #4a4a4a, #111);
+  text-shadow: none;
+}
+
 .stages {
   display: flex;
   flex-direction: column;

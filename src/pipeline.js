@@ -644,7 +644,7 @@ export function makeUniforms() {
     // global noise trim: raw Bayer noise is injected, then reduced in later stages
     // down through Bayer/RGB denoising, so we scale the injection to roughly
     // what survives the realtime subset.
-    noiseScale: uniform(0.35),
+    noiseScale: uniform(1.06),
     P: {
       barrel: uniform(0), ca: uniform(0),
       lensSoftness: uniform(0.25),
@@ -661,7 +661,7 @@ export function makeUniforms() {
       ccm2: uniform(new THREE.Vector3(0, 0, 1)),
       hiClip: uniform(255), gamma: uniform(1), shadow: uniform(0), sat: uniform(1),
       vignette: uniform(0), eeGain: uniform(0), eeThresh: uniform(0),
-      jpegQuality: uniform(60), jpegStrength: uniform(1.0), jpegChroma420: uniform(0.75),
+      jpegQuality: uniform(60), jpegStrength: uniform(0.2), jpegChroma420: uniform(0.75),
     },
   };
 }
@@ -704,7 +704,7 @@ export function applyPreset(ctx, preset) {
   P.eeGain.value = preset.ee_gain;
   P.eeThresh.value = preset.ee_threshold;
   P.jpegQuality.value = preset.jpeg_quality;
-  P.jpegStrength.value = 1.0;
+  P.jpegStrength.value = 0.2;
 }
 
 // ---------------------------------------------------------------------------

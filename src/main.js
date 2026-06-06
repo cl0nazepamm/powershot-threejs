@@ -21,10 +21,12 @@ const els = {
   chromaval: document.getElementById("chromaval"),
   jpeg: document.getElementById("jpeg"),
   jpegval: document.getElementById("jpegval"),
+  freeze: document.getElementById("freeze-noise"),
   stages: document.getElementById("stages"),
   drop: document.getElementById("drop"),
   file: document.getElementById("file"),
-  reset: document.getElementById("reset-stages"),
+  enableStages: document.getElementById("enable-stages"),
+  disableStages: document.getElementById("disable-stages"),
   status: document.getElementById("status"),
 };
 
@@ -32,6 +34,7 @@ let renderer, pipeline, source = null;
 let frame = 0;
 let presetKey = "cybershot";
 let busy = false;
+let freezeNoise = true;
 
 // fps tracking
 let fpsLast = performance.now();
@@ -88,7 +91,8 @@ function buildStageUI() {
     row.className = "row";
     const cb = document.createElement("input");
     cb.type = "checkbox";
-    cb.checked = true;
+    cb.checked = pipeline.enabled.has(stage.id);
+    row.classList.toggle("off", !cb.checked);
     cb.addEventListener("change", () => {
       pipeline.setEnabled(stage.id, cb.checked);
       row.classList.toggle("off", !cb.checked);
@@ -132,9 +136,17 @@ function wireInput() {
     pipeline.ctx.P.jpegStrength.value = v;
     els.jpegval.textContent = v.toFixed(2);
   });
+  els.freeze.addEventListener("click", () => {
+    freezeNoise = !freezeNoise;
+    syncFreezeUI();
+  });
 
-  els.reset.addEventListener("click", () => {
+  els.enableStages.addEventListener("click", () => {
     for (const stage of STAGE_DEFS) pipeline.setEnabled(stage.id, true);
+    buildStageUI();
+  });
+  els.disableStages.addEventListener("click", () => {
+    for (const stage of STAGE_DEFS) pipeline.setEnabled(stage.id, false);
     buildStageUI();
   });
 
@@ -156,6 +168,11 @@ function wireInput() {
   });
 }
 
+function syncFreezeUI() {
+  els.freeze.textContent = freezeNoise ? "unfreeze noise" : "freeze noise";
+  els.freeze.classList.toggle("active", freezeNoise);
+}
+
 function syncEffectUI() {
   const lens = pipeline.ctx.P.lensSoftness.value;
   els.lens.value = Math.round(lens * 100);
@@ -165,6 +182,10 @@ function syncEffectUI() {
   els.bloom.value = Math.round(bloom * 100);
   els.bloomval.textContent = bloom.toFixed(2);
 
+  const noise = pipeline.ctx.noiseScale.value;
+  els.noise.value = Math.round(noise * 100);
+  els.noiseval.textContent = noise.toFixed(2);
+
   const bnr = pipeline.ctx.P.bayerNR.value;
   els.bayernr.value = Math.round(bnr * 100);
   els.bayernrval.textContent = bnr.toFixed(2);
@@ -172,6 +193,7 @@ function syncEffectUI() {
   const jpeg = pipeline.ctx.P.jpegStrength.value;
   els.jpeg.value = Math.round(jpeg * 100);
   els.jpegval.textContent = jpeg.toFixed(2);
+  syncFreezeUI();
 }
 
 async function loadFile(file) {
@@ -221,7 +243,7 @@ function resizeForSource() {
 async function tick() {
   if (!source || busy) return;
   busy = true;
-  frame += 1;
+  if (!freezeNoise) frame += 1;
 
   try {
     await pipeline.render(frame);
@@ -241,7 +263,8 @@ async function tick() {
     fps = Math.round((fpsCount * 1000) / (now - fpsLast));
     fpsLast = now; fpsCount = 0;
     const r = pipeline.ctx.resolution.value;
-    setStatus(`${PRESETS[presetKey].name}\n${r.x}×${r.y} · ${fps} fps · ${pipeline.enabled.size}/${STAGE_DEFS.length} stages`);
+    const frozen = freezeNoise ? " · frozen" : "";
+    setStatus(`${PRESETS[presetKey].name}\n${r.x}×${r.y} · ${fps} fps · ${pipeline.enabled.size}/${STAGE_DEFS.length} stages${frozen}`);
   }
 }
 

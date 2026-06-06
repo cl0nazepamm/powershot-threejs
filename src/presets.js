@@ -20,7 +20,7 @@ export const PRESETS = {
     saturation_boost: 1.12,
     gamma: 0.48,
     demosaic_quality: "bilinear",
-    ccd_bloom_strength: 0.4,
+    ccd_bloom_strength: 1.12,
     ccd_bloom_threshold: 200,
     black_level: [4, 2, 2, 3],
     aaf_strength: 0.6,

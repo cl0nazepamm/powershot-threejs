@@ -22,13 +22,13 @@
     </div>
 
     <div>
-      <label for="bloom">CCD bloom · <span id="bloomval">0.40</span></label>
-      <input id="bloom" type="range" min="0" max="300" value="40">
+      <label for="bloom">CCD bloom · <span id="bloomval">1.12</span></label>
+      <input id="bloom" type="range" min="0" max="300" value="112">
     </div>
 
     <div>
-      <label for="noise">Noise amount · <span id="noiseval">0.35</span></label>
-      <input id="noise" type="range" min="0" max="300" value="35">
+      <label for="noise">Noise amount · <span id="noiseval">1.06</span></label>
+      <input id="noise" type="range" min="0" max="300" value="106">
     </div>
 
     <div>
@@ -42,9 +42,11 @@
     </div>
 
     <div>
-      <label for="jpeg">JPEG DCT · <span id="jpegval">1.00</span></label>
-      <input id="jpeg" type="range" min="0" max="300" value="100">
+      <label for="jpeg">JPEG DCT · <span id="jpegval">0.20</span></label>
+      <input id="jpeg" type="range" min="0" max="300" value="20">
     </div>
+
+    <button id="freeze-noise" class="active">unfreeze noise</button>
 
     <div id="drop">drop an image here<br>(or click to choose)</div>
     <input id="file" type="file" accept="image/*" hidden>
@@ -54,7 +56,10 @@
       <div class="stages" id="stages"></div>
     </div>
 
-    <button id="reset-stages">enable all stages</button>
+    <div class="button-row">
+      <button id="enable-stages">enable all</button>
+      <button id="disable-stages">disable all</button>
+    </div>
     <div id="status">booting...</div>
   </div>
 
