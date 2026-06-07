@@ -494,6 +494,127 @@ function yCbCrToRgb(c) {
   );
 }
 
+function softBand(value, start, end) {
+  return value.sub(start).div(end - start).clamp(0.0, 1.0);
+}
+
+function analogSampleYcc(tex, ctx, uv, pxOffset) {
+  return rgbToYCbCr(texture(tex, uv.add(ctx.texel.mul(pxOffset))).rgb);
+}
+
+function analogCarrier(p, fieldPhase) {
+  return sin(p.x.mul(1.5707963).add(fieldPhase));
+}
+
+function stAnalogVhs(tex, ctx) {
+  const p = floor(screenUV.mul(ctx.resolution));
+  const t = ctx.frame.mul(0.037);
+  const strength = ctx.P.analogStrength.clamp(0.0, 3.0);
+  const tracking = ctx.P.analogTracking.clamp(0.0, 3.0);
+  const chromaBleed = ctx.P.analogChromaBleed.clamp(0.0, 3.0);
+  const ringing = ctx.P.analogRinging.clamp(0.0, 3.0);
+  const tapeNoise = ctx.P.analogTapeNoise.clamp(0.0, 3.0);
+  const edgeWaveAmount = ctx.P.analogEdgeWave.clamp(0.0, 3.0);
+  const dropoutAmount = ctx.P.analogDropouts.clamp(0.0, 3.0);
+  const scanlines = ctx.P.analogScanlines.clamp(0.0, 3.0);
+  const headSwitch = ctx.P.analogHeadSwitch.clamp(0.0, 3.0);
+  const active = strength.mul(step(0.001, strength));
+
+  const rowNoise = hash12(vec2(p.y.mul(0.37), floor(t.mul(29.0))).add(13.7)).sub(0.5);
+  const lineWave = sin(p.y.mul(0.073).add(t.mul(5.3))).add(sin(p.y.mul(0.019).sub(t.mul(2.1))).mul(0.55));
+  const headMask = softBand(screenUV.y, 0.875, 0.995);
+  const headNoise = hash12(vec2(p.y, floor(t.mul(47.0))).add(91.3)).sub(0.5);
+  const fieldLine = floor(p.y.div(2.0));
+  const edgeStep = hash12(vec2(fieldLine.mul(0.17), floor(ctx.frame.mul(0.09))).add(41.0)).sub(0.5);
+  const edgeWave = sin(fieldLine.mul(0.37).add(t.mul(1.7))).mul(edgeStep).mul(edgeWaveAmount.mul(1.65));
+  const xJitterPx = lineWave.mul(tracking.mul(0.85))
+    .add(rowNoise.mul(tracking.mul(2.0)))
+    .add(edgeWave)
+    .add(headNoise.mul(headMask.mul(tracking.mul(headSwitch).mul(12.0))));
+  const uv = screenUV.add(ctx.texel.mul(vec2(xJitterPx, 0.0)));
+
+  const base = rgbToYCbCr(texture(tex, uv).rgb);
+  const left = analogSampleYcc(tex, ctx, uv, vec2(-1.0, 0.0));
+  const right = analogSampleYcc(tex, ctx, uv, vec2(1.0, 0.0));
+  const farLeft = analogSampleYcc(tex, ctx, uv, vec2(-3.0, 0.0));
+  const farRight = analogSampleYcc(tex, ctx, uv, vec2(3.0, 0.0));
+  const veryLeft = analogSampleYcc(tex, ctx, uv, vec2(-7.0, 0.0));
+  const veryRight = analogSampleYcc(tex, ctx, uv, vec2(7.0, 0.0));
+  const above = analogSampleYcc(tex, ctx, uv, vec2(0.0, -2.0));
+  const below = analogSampleYcc(tex, ctx, uv, vec2(0.0, 2.0));
+
+  const chromaDelayPx = float(1.6).add(chromaBleed.mul(3.2));
+  const chromaDelay = analogSampleYcc(tex, ctx, uv, vec2(chromaDelayPx, 0.0));
+  const wideChromaDelay = analogSampleYcc(tex, ctx, uv, vec2(chromaDelayPx.add(chromaBleed.mul(5.0)), 0.0));
+  const chromaHoriz = left.yz.add(base.yz.mul(2.0)).add(right.yz).add(chromaDelay.yz.mul(2.0)).add(wideChromaDelay.yz).div(7.0);
+  const chromaVert = above.yz.add(base.yz.mul(2.0)).add(below.yz).div(4.0);
+  const chromaBlur = mix(chromaHoriz, chromaVert, chromaBleed.mul(0.28).clamp(0.0, 0.55));
+
+  const edge = right.x.sub(left.x);
+  const lumaBlur = veryLeft.x.add(farLeft.x.mul(2.0)).add(left.x.mul(3.0)).add(base.x.mul(4.0))
+    .add(right.x.mul(3.0)).add(farRight.x.mul(2.0)).add(veryRight.x).div(16.0);
+  const lumaHigh = base.x.sub(lumaBlur);
+  const preemphasis = lumaHigh.mul(ringing.mul(0.95));
+  const ring2 = farLeft.x.sub(left.x).add(right.x.sub(farRight.x)).mul(0.16)
+    .add(veryLeft.x.sub(farLeft.x).add(farRight.x.sub(veryRight.x)).mul(0.08))
+    .add(edge.mul(0.23));
+  const freqNoise = hash12(vec2(floor(p.x.mul(0.055)), fieldLine.add(floor(ctx.frame.mul(0.21))))).sub(0.5);
+  let y = mix(base.x, lumaBlur.add(preemphasis), strength.mul(0.42).clamp(0.0, 0.74));
+  y = y.add(ring2.mul(ringing.mul(1.35).add(freqNoise.mul(tapeNoise.mul(0.52)))));
+
+  const sat = lengthApprox(base.yz);
+  const phaseBucket = mod(floor(p.y.div(2.0)).add(ctx.frame.mul(0.25)), 4.0);
+  const phaseOffset = phaseBucket.mul(1.5707963).add(ctx.P.analogTracking.mul(0.35));
+  const carrier = analogCarrier(p, phaseOffset);
+  const carrierQ = analogCarrier(p.add(vec2(1.0, 0.0)), phaseOffset);
+  const crawl = carrier.mul(sat).mul(chromaBleed.mul(0.32));
+  y = y.add(crawl.mul(0.55));
+
+  let chroma = mix(base.yz, chromaBlur, chromaBleed.mul(0.58).clamp(0.0, 0.9));
+  const phaseNoise = rowNoise.mul(chromaBleed.mul(0.22)).add(headNoise.mul(headMask.mul(headSwitch).mul(0.65)));
+  const phaseSin = sin(phaseNoise);
+  const phaseCos = cos(phaseNoise);
+  chroma = vec2(
+    chroma.x.mul(phaseCos).sub(chroma.y.mul(phaseSin)),
+    chroma.x.mul(phaseSin).add(chroma.y.mul(phaseCos)),
+  );
+  const chromaNoise = vec2(
+    gaussTemporal(p, ctx.frame, 121.0),
+    gaussTemporal(p, ctx.frame, 177.0),
+  ).mul(tapeNoise.mul(1.35));
+  chroma = chroma.add(chromaNoise).add(vec2(carrier.mul(crawl).mul(0.34), carrierQ.mul(crawl).mul(-0.22)));
+
+  const dropoutSeed = hash12(vec2(fieldLine.mul(0.071), floor(ctx.frame.mul(0.13))).add(73.0));
+  const dropoutGate = step(float(1.0).sub(dropoutAmount.mul(0.045).clamp(0.0, 0.22)), dropoutSeed);
+  const dropoutBand = dropoutGate.mul(softBand(fract(p.x.mul(0.003).add(dropoutSeed)), 0.1, 0.9));
+  const chromaLoss = dropoutBand.mul(dropoutAmount.mul(0.85)).clamp(0.0, 1.0);
+  chroma = mix(chroma, chroma.mul(0.08), chromaLoss);
+  y = y.add(dropoutBand.mul(hash12(vec2(p.x, ctx.frame).add(12.0)).sub(0.5)).mul(tapeNoise.mul(dropoutAmount).mul(34.0)));
+
+  const scan = sin(p.y.mul(3.1415927)).mul(0.5).add(0.5);
+  const interlace = step(0.5, mod(p.y.add(ctx.frame), 2.0));
+  y = y.mul(float(1.0).sub(scan.mul(scanlines.mul(0.055))).sub(interlace.mul(scanlines.mul(0.025))));
+  y = y.add(gaussTemporal(p, ctx.frame, 211.0).mul(tapeNoise.mul(1.6)));
+
+  const headStripe = sin(p.y.mul(0.92).add(t.mul(31.0))).mul(0.5).add(0.5);
+  const headTear = headMask.mul(headSwitch).clamp(0.0, 1.0);
+  y = mix(y, y.mul(0.55).add(headStripe.mul(55.0)), headTear.mul(0.72));
+  chroma = mix(chroma, chroma.mul(0.25).add(vec2(headNoise.mul(18.0), headStripe.sub(0.5).mul(12.0))), headTear);
+
+  const rightBorder = step(0.983, screenUV.x).mul(strength.mul(0.72).clamp(0.0, 1.0));
+  y = mix(y, y.mul(0.15), rightBorder);
+  chroma = mix(chroma, chroma.mul(0.1), rightBorder);
+
+  const oversat = float(1.0).add(strength.mul(0.18));
+  const analog = yCbCrToRgb(vec3(y, chroma.mul(oversat))).clamp(0.0, LEVELS);
+  const source = texture(tex, screenUV).rgb;
+  return mix(source, analog, active.clamp(0.0, 1.0)).clamp(0.0, LEVELS);
+}
+
+function lengthApprox(v) {
+  return abs(v.x).add(abs(v.y)).mul(0.5);
+}
+
 function dctBasis(pos, freq) {
   return cos(pos.mul(2.0).add(1.0).mul(freq).mul(0.19634954084936207));
 }
@@ -642,9 +763,10 @@ function stOutput(tex, ctx) {
 }
 
 function powershotOutputAlpha(sourceSample, finalColor) {
+  const sourceAlpha = sourceSample.a.clamp(0.0, 1.0);
   const effectDelta = dot(abs(finalColor.sub(sourceSample.rgb)), LUMA);
-  const effectAlpha = step(0.025, effectDelta);
-  return max(step(0.001, sourceSample.a), effectAlpha);
+  const effectAlpha = effectDelta.sub(0.002).mul(6.0).clamp(0.0, 0.65);
+  return sourceAlpha.add(effectAlpha.mul(sourceAlpha.oneMinus())).clamp(0.0, 1.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -671,6 +793,10 @@ export const STAGE_DEFS = [
   { id: "vignette", label: "Vignette", make: stVignette },
   { id: "edge", label: "Edge enhancement", make: stEdgeEnhance },
   { id: "jpeg", label: "JPEG DCT compression", multi: [stJpegDctRows, stJpegDctColsQuant, stJpegIdct] },
+];
+
+export const ANALOG_STAGE_DEFS = [
+  { id: "analog", label: "Analog VHS / NTSC", make: stAnalogVhs },
 ];
 
 const RGB_POINT_STAGE_IDS = new Set(["ccm", "tone", "saturation", "vignette"]);
@@ -705,6 +831,10 @@ export function makeUniforms() {
       hiClip: uniform(255), gamma: uniform(1), shadow: uniform(0), sat: uniform(1),
       vignette: uniform(0), eeGain: uniform(0), eeThresh: uniform(0),
       jpegQuality: uniform(60), jpegStrength: uniform(0.2), jpegChroma420: uniform(0.75),
+      analogStrength: uniform(0.65), analogTracking: uniform(0.45),
+      analogChromaBleed: uniform(0.75), analogRinging: uniform(0.65), analogTapeNoise: uniform(0.75),
+      analogEdgeWave: uniform(0.35), analogDropouts: uniform(0.35), analogScanlines: uniform(0.55),
+      analogHeadSwitch: uniform(0.45),
     },
   };
 }
@@ -749,6 +879,15 @@ export function applyPreset(ctx, preset) {
   P.eeThresh.value = preset.ee_threshold;
   P.jpegQuality.value = preset.jpeg_quality;
   P.jpegStrength.value = 0.2;
+  P.analogStrength.value = preset.analog_vhs_strength ?? 0.65;
+  P.analogTracking.value = preset.analog_tracking ?? 0.45;
+  P.analogChromaBleed.value = preset.analog_chroma_bleed ?? 0.75;
+  P.analogRinging.value = preset.analog_ringing ?? 0.65;
+  P.analogTapeNoise.value = preset.analog_tape_noise ?? 0.75;
+  P.analogEdgeWave.value = preset.analog_edge_wave ?? 0.35;
+  P.analogDropouts.value = preset.analog_dropouts ?? 0.35;
+  P.analogScanlines.value = preset.analog_scanlines ?? 0.55;
+  P.analogHeadSwitch.value = preset.analog_head_switch ?? 0.45;
 }
 
 // ---------------------------------------------------------------------------
@@ -786,6 +925,7 @@ export class Pipeline {
     this.quadScene.add(this.mesh);
 
     this.enabled = new Set(STAGE_DEFS.map((s) => s.id));
+    this.mode = "digital";
     this.source = null;
     this.size = { w: 0, h: 0 };
     this.steps = [];       // [{ material, target }]
@@ -821,6 +961,12 @@ export class Pipeline {
     this.dirty = true;
   }
 
+  setMode(mode) {
+    if (mode === this.mode) return;
+    this.mode = mode;
+    this.dirty = true;
+  }
+
   _rebuild() {
     for (const s of this.steps) s.material.dispose();
     if (this.outputMat) this.outputMat.dispose();
@@ -839,7 +985,9 @@ export class Pipeline {
     // ping-pong the active stages across rtA/rtB with baked input textures
     let read = this.rtA;
     let write = this.rtB;
-    const active = STAGE_DEFS.filter((s) => this.enabled.has(s.id));
+    const active = this.mode === "analog"
+      ? ANALOG_STAGE_DEFS
+      : STAGE_DEFS.filter((s) => this.enabled.has(s.id));
     for (let i = 0; i < active.length; i += 1) {
       const stage = active[i];
       if (stage.id === "blacklevel" && active[i + 1]?.id === "noise") {

@@ -12,6 +12,15 @@
     <h1>PowerSHOT<small>realtime ISP · WebGPU / TSL</small></h1>
 
     <div>
+      <label for="mode">Mode</label>
+      <select id="mode">
+        <option value="digital">Digital camera</option>
+        <option value="analog">Analog VHS</option>
+      </select>
+    </div>
+
+    <div id="digital-controls">
+    <div>
       <label for="preset">Camera preset</label>
       <select id="preset"></select>
     </div>
@@ -45,20 +54,68 @@
       <label for="jpeg">JPEG DCT · <span id="jpegval">0.20</span></label>
       <input id="jpeg" type="range" min="0" max="300" value="20">
     </div>
+    </div>
+
+    <div id="analog-controls" hidden>
+      <div>
+        <label for="analog">VHS amount · <span id="analogval">0.65</span></label>
+        <input id="analog" type="range" min="0" max="300" value="65">
+      </div>
+
+      <div>
+        <label for="tracking">Tracking · <span id="trackingval">0.45</span></label>
+        <input id="tracking" type="range" min="0" max="300" value="45">
+      </div>
+
+      <div>
+        <label for="chromableed">Chroma bleed · <span id="chromableedval">0.75</span></label>
+        <input id="chromableed" type="range" min="0" max="300" value="75">
+      </div>
+
+      <div>
+        <label for="ringing">Ringing · <span id="ringingval">0.65</span></label>
+        <input id="ringing" type="range" min="0" max="300" value="65">
+      </div>
+
+      <div>
+        <label for="tapenoise">Tape noise · <span id="tapenoiseval">0.75</span></label>
+        <input id="tapenoise" type="range" min="0" max="300" value="75">
+      </div>
+
+      <div>
+        <label for="edgewave">Edge wave · <span id="edgewaveval">0.35</span></label>
+        <input id="edgewave" type="range" min="0" max="300" value="35">
+      </div>
+
+      <div>
+        <label for="dropouts">Dropouts · <span id="dropoutsval">0.35</span></label>
+        <input id="dropouts" type="range" min="0" max="300" value="35">
+      </div>
+
+      <div>
+        <label for="scanlines">Scanlines · <span id="scanlinesval">0.55</span></label>
+        <input id="scanlines" type="range" min="0" max="300" value="55">
+      </div>
+
+      <div>
+        <label for="headswitch">Head switch · <span id="headswitchval">0.45</span></label>
+        <input id="headswitch" type="range" min="0" max="300" value="45">
+      </div>
+    </div>
 
     <button id="freeze-noise" class="active">unfreeze noise</button>
 
     <div id="drop">drop an image here<br>(or click to choose)</div>
     <input id="file" type="file" accept="image/*" hidden>
 
-    <div>
+    <div id="stage-controls">
       <label>Pipeline stages</label>
       <div class="stages" id="stages"></div>
-    </div>
 
-    <div class="button-row">
-      <button id="enable-stages">enable all</button>
-      <button id="disable-stages">disable all</button>
+      <div class="button-row">
+        <button id="enable-stages">enable all</button>
+        <button id="disable-stages">disable all</button>
+      </div>
     </div>
     <div id="status">booting...</div>
   </div>

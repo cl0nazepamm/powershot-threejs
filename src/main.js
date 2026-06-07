@@ -4,11 +4,15 @@ import { PRESETS, PRESET_KEYS } from "./presets.js";
 import { Pipeline, applyPreset, STAGE_DEFS } from "./pipeline.js";
 
 const MAX_WORK = 1600; // cap working resolution for snappy realtime
+const ANALOG_WORK = [720, 540];
 const DEFAULT_IMAGE = `${import.meta.env.BASE_URL}vibe%20coding.jpg`;
 
 const els = {
   canvas: document.getElementById("view"),
+  mode: document.getElementById("mode"),
   preset: document.getElementById("preset"),
+  digitalControls: document.getElementById("digital-controls"),
+  analogControls: document.getElementById("analog-controls"),
   lens: document.getElementById("lens"),
   lensval: document.getElementById("lensval"),
   bloom: document.getElementById("bloom"),
@@ -21,8 +25,27 @@ const els = {
   chromaval: document.getElementById("chromaval"),
   jpeg: document.getElementById("jpeg"),
   jpegval: document.getElementById("jpegval"),
+  analog: document.getElementById("analog"),
+  analogval: document.getElementById("analogval"),
+  tracking: document.getElementById("tracking"),
+  trackingval: document.getElementById("trackingval"),
+  chromableed: document.getElementById("chromableed"),
+  chromableedval: document.getElementById("chromableedval"),
+  ringing: document.getElementById("ringing"),
+  ringingval: document.getElementById("ringingval"),
+  tapenoise: document.getElementById("tapenoise"),
+  tapenoiseval: document.getElementById("tapenoiseval"),
+  edgewave: document.getElementById("edgewave"),
+  edgewaveval: document.getElementById("edgewaveval"),
+  dropouts: document.getElementById("dropouts"),
+  dropoutsval: document.getElementById("dropoutsval"),
+  scanlines: document.getElementById("scanlines"),
+  scanlinesval: document.getElementById("scanlinesval"),
+  headswitch: document.getElementById("headswitch"),
+  headswitchval: document.getElementById("headswitchval"),
   freeze: document.getElementById("freeze-noise"),
   stages: document.getElementById("stages"),
+  stageControls: document.getElementById("stage-controls"),
   drop: document.getElementById("drop"),
   file: document.getElementById("file"),
   enableStages: document.getElementById("enable-stages"),
@@ -32,6 +55,7 @@ const els = {
 
 let renderer, pipeline, source = null;
 let frame = 0;
+let mode = "digital";
 let presetKey = "cybershot";
 let busy = false;
 let freezeNoise = true;
@@ -106,6 +130,14 @@ function buildStageUI() {
 }
 
 function wireInput() {
+  els.mode.addEventListener("change", () => {
+    mode = els.mode.value;
+    freezeNoise = mode === "digital";
+    pipeline.setMode(mode);
+    syncModeUI();
+    syncFreezeUI();
+    resizeForSource();
+  });
   els.lens.addEventListener("input", () => {
     const v = els.lens.value / 100;
     pipeline.ctx.P.lensSoftness.value = v;
@@ -135,6 +167,51 @@ function wireInput() {
     const v = els.jpeg.value / 100;
     pipeline.ctx.P.jpegStrength.value = v;
     els.jpegval.textContent = v.toFixed(2);
+  });
+  els.analog.addEventListener("input", () => {
+    const v = els.analog.value / 100;
+    pipeline.ctx.P.analogStrength.value = v;
+    els.analogval.textContent = v.toFixed(2);
+  });
+  els.tracking.addEventListener("input", () => {
+    const v = els.tracking.value / 100;
+    pipeline.ctx.P.analogTracking.value = v;
+    els.trackingval.textContent = v.toFixed(2);
+  });
+  els.chromableed.addEventListener("input", () => {
+    const v = els.chromableed.value / 100;
+    pipeline.ctx.P.analogChromaBleed.value = v;
+    els.chromableedval.textContent = v.toFixed(2);
+  });
+  els.ringing.addEventListener("input", () => {
+    const v = els.ringing.value / 100;
+    pipeline.ctx.P.analogRinging.value = v;
+    els.ringingval.textContent = v.toFixed(2);
+  });
+  els.tapenoise.addEventListener("input", () => {
+    const v = els.tapenoise.value / 100;
+    pipeline.ctx.P.analogTapeNoise.value = v;
+    els.tapenoiseval.textContent = v.toFixed(2);
+  });
+  els.edgewave.addEventListener("input", () => {
+    const v = els.edgewave.value / 100;
+    pipeline.ctx.P.analogEdgeWave.value = v;
+    els.edgewaveval.textContent = v.toFixed(2);
+  });
+  els.dropouts.addEventListener("input", () => {
+    const v = els.dropouts.value / 100;
+    pipeline.ctx.P.analogDropouts.value = v;
+    els.dropoutsval.textContent = v.toFixed(2);
+  });
+  els.scanlines.addEventListener("input", () => {
+    const v = els.scanlines.value / 100;
+    pipeline.ctx.P.analogScanlines.value = v;
+    els.scanlinesval.textContent = v.toFixed(2);
+  });
+  els.headswitch.addEventListener("input", () => {
+    const v = els.headswitch.value / 100;
+    pipeline.ctx.P.analogHeadSwitch.value = v;
+    els.headswitchval.textContent = v.toFixed(2);
   });
   els.freeze.addEventListener("click", () => {
     freezeNoise = !freezeNoise;
@@ -168,12 +245,23 @@ function wireInput() {
   });
 }
 
+function syncModeUI() {
+  const analogMode = mode === "analog";
+  els.digitalControls.hidden = analogMode;
+  els.stageControls.hidden = analogMode;
+  els.analogControls.hidden = !analogMode;
+  els.mode.value = mode;
+}
+
 function syncFreezeUI() {
-  els.freeze.textContent = freezeNoise ? "unfreeze noise" : "freeze noise";
+  const noun = mode === "analog" ? "tape" : "noise";
+  els.freeze.textContent = freezeNoise ? `unfreeze ${noun}` : `freeze ${noun}`;
   els.freeze.classList.toggle("active", freezeNoise);
 }
 
 function syncEffectUI() {
+  syncModeUI();
+
   const lens = pipeline.ctx.P.lensSoftness.value;
   els.lens.value = Math.round(lens * 100);
   els.lensval.textContent = lens.toFixed(2);
@@ -193,6 +281,43 @@ function syncEffectUI() {
   const jpeg = pipeline.ctx.P.jpegStrength.value;
   els.jpeg.value = Math.round(jpeg * 100);
   els.jpegval.textContent = jpeg.toFixed(2);
+
+  const analog = pipeline.ctx.P.analogStrength.value;
+  els.analog.value = Math.round(analog * 100);
+  els.analogval.textContent = analog.toFixed(2);
+
+  const tracking = pipeline.ctx.P.analogTracking.value;
+  els.tracking.value = Math.round(tracking * 100);
+  els.trackingval.textContent = tracking.toFixed(2);
+
+  const chromaBleed = pipeline.ctx.P.analogChromaBleed.value;
+  els.chromableed.value = Math.round(chromaBleed * 100);
+  els.chromableedval.textContent = chromaBleed.toFixed(2);
+
+  const ringing = pipeline.ctx.P.analogRinging.value;
+  els.ringing.value = Math.round(ringing * 100);
+  els.ringingval.textContent = ringing.toFixed(2);
+
+  const tapeNoise = pipeline.ctx.P.analogTapeNoise.value;
+  els.tapenoise.value = Math.round(tapeNoise * 100);
+  els.tapenoiseval.textContent = tapeNoise.toFixed(2);
+
+  const edgeWave = pipeline.ctx.P.analogEdgeWave.value;
+  els.edgewave.value = Math.round(edgeWave * 100);
+  els.edgewaveval.textContent = edgeWave.toFixed(2);
+
+  const dropouts = pipeline.ctx.P.analogDropouts.value;
+  els.dropouts.value = Math.round(dropouts * 100);
+  els.dropoutsval.textContent = dropouts.toFixed(2);
+
+  const scanlines = pipeline.ctx.P.analogScanlines.value;
+  els.scanlines.value = Math.round(scanlines * 100);
+  els.scanlinesval.textContent = scanlines.toFixed(2);
+
+  const headSwitch = pipeline.ctx.P.analogHeadSwitch.value;
+  els.headswitch.value = Math.round(headSwitch * 100);
+  els.headswitchval.textContent = headSwitch.toFixed(2);
+
   syncFreezeUI();
 }
 
@@ -231,7 +356,7 @@ function resizeForSource() {
   if (!source) return;
   const imgW = source.userData.w;
   const imgH = source.userData.h;
-  const sensor = PRESETS[presetKey].sensor_resolution;
+  const sensor = mode === "analog" ? ANALOG_WORK : PRESETS[presetKey].sensor_resolution;
   const fit = Math.min(sensor[0] / imgW, sensor[1] / imgH, MAX_WORK / imgW, MAX_WORK / imgH, 1.0);
   let w = Math.round(imgW * fit); w -= w % 2;
   let h = Math.round(imgH * fit); h -= h % 2;
@@ -264,7 +389,9 @@ async function tick() {
     fpsLast = now; fpsCount = 0;
     const r = pipeline.ctx.resolution.value;
     const frozen = freezeNoise ? " · frozen" : "";
-    setStatus(`${PRESETS[presetKey].name}\n${r.x}×${r.y} · ${fps} fps · ${pipeline.enabled.size}/${STAGE_DEFS.length} stages${frozen}`);
+    const modeLabel = mode === "analog" ? "Analog VHS" : PRESETS[presetKey].name;
+    const stageLabel = mode === "analog" ? "analog mode" : `${pipeline.enabled.size}/${STAGE_DEFS.length} stages`;
+    setStatus(`${modeLabel}\n${r.x}×${r.y} · ${fps} fps · ${stageLabel}${frozen}`);
   }
 }
 
