@@ -519,18 +519,28 @@ function stAnalogVhs(tex, ctx) {
   const scanlines = ctx.P.analogScanlines.clamp(0.0, 3.0);
   const headSwitch = ctx.P.analogHeadSwitch.clamp(0.0, 3.0);
   const active = strength.mul(step(0.001, strength));
+  const fieldLine = floor(p.y.div(2.0));
 
   const rowNoise = hash12(vec2(p.y.mul(0.37), floor(t.mul(29.0))).add(13.7)).sub(0.5);
   const lineWave = sin(p.y.mul(0.073).add(t.mul(5.3))).add(sin(p.y.mul(0.019).sub(t.mul(2.1))).mul(0.55));
-  const headMask = softBand(screenUV.y, 0.875, 0.995);
-  const headNoise = hash12(vec2(p.y, floor(t.mul(47.0))).add(91.3)).sub(0.5);
-  const fieldLine = floor(p.y.div(2.0));
+  const headDrift = sin(ctx.frame.mul(0.021)).mul(0.018)
+    .add(hash12(vec2(floor(ctx.frame.mul(0.037)), 8.1)).sub(0.5).mul(0.014));
+  const headY = float(0.84).add(headDrift).clamp(0.78, 0.93);
+  const belowHead = screenUV.y.sub(headY);
+  const afterHead = step(0.0, belowHead);
+  const headAttack = belowHead.div(0.018).clamp(0.0, 1.0);
+  const headFalloff = float(1.0).sub(belowHead.sub(0.055).div(0.16).clamp(0.0, 1.0));
+  const headMask = afterHead.mul(headAttack).mul(headFalloff).mul(headSwitch).clamp(0.0, 1.0);
+  const headDecay = exp(belowHead.mul(-24.0)).mul(afterHead).mul(headSwitch).clamp(0.0, 1.0);
+  const headNoise = hash12(vec2(fieldLine, floor(t.mul(47.0))).add(91.3)).sub(0.5);
+  const headPhaseShift = hash12(vec2(floor(ctx.frame.mul(0.071)), 19.7)).sub(0.5).mul(2.0);
   const edgeStep = hash12(vec2(fieldLine.mul(0.17), floor(ctx.frame.mul(0.09))).add(41.0)).sub(0.5);
   const edgeWave = sin(fieldLine.mul(0.37).add(t.mul(1.7))).mul(edgeStep).mul(edgeWaveAmount.mul(1.65));
   const xJitterPx = lineWave.mul(tracking.mul(0.85))
     .add(rowNoise.mul(tracking.mul(2.0)))
     .add(edgeWave)
-    .add(headNoise.mul(headMask.mul(tracking.mul(headSwitch).mul(12.0))));
+    .add(headPhaseShift.mul(headDecay.mul(tracking.mul(34.0))))
+    .add(headNoise.mul(headMask.mul(tracking.mul(9.0))));
   const uv = screenUV.add(ctx.texel.mul(vec2(xJitterPx, 0.0)));
 
   const base = rgbToYCbCr(texture(tex, uv).rgb);
@@ -571,7 +581,7 @@ function stAnalogVhs(tex, ctx) {
   y = y.add(crawl.mul(0.55));
 
   let chroma = mix(base.yz, chromaBlur, chromaBleed.mul(0.58).clamp(0.0, 0.9));
-  const phaseNoise = rowNoise.mul(chromaBleed.mul(0.22)).add(headNoise.mul(headMask.mul(headSwitch).mul(0.65)));
+  const phaseNoise = rowNoise.mul(chromaBleed.mul(0.22)).add(headNoise.mul(headMask.mul(0.65)));
   const phaseSin = sin(phaseNoise);
   const phaseCos = cos(phaseNoise);
   chroma = vec2(
@@ -596,10 +606,11 @@ function stAnalogVhs(tex, ctx) {
   y = y.mul(float(1.0).sub(scan.mul(scanlines.mul(0.055))).sub(interlace.mul(scanlines.mul(0.025))));
   y = y.add(gaussTemporal(p, ctx.frame, 211.0).mul(tapeNoise.mul(1.6)));
 
-  const headStripe = sin(p.y.mul(0.92).add(t.mul(31.0))).mul(0.5).add(0.5);
-  const headTear = headMask.mul(headSwitch).clamp(0.0, 1.0);
-  y = mix(y, y.mul(0.55).add(headStripe.mul(55.0)), headTear.mul(0.72));
-  chroma = mix(chroma, chroma.mul(0.25).add(vec2(headNoise.mul(18.0), headStripe.sub(0.5).mul(12.0))), headTear);
+  const headLine = float(1.0).sub(abs(belowHead).div(0.006).clamp(0.0, 1.0)).mul(headSwitch);
+  const headStripe = sin(belowHead.mul(ctx.resolution.y).mul(1.7).add(t.mul(31.0))).mul(0.5).add(0.5);
+  const headTear = headMask.clamp(0.0, 1.0);
+  y = mix(y, y.mul(0.62).add(headStripe.mul(48.0)).add(headLine.mul(70.0)), headTear.mul(0.78));
+  chroma = mix(chroma, chroma.mul(0.18).add(vec2(headNoise.mul(20.0), headStripe.sub(0.5).mul(14.0))), headTear);
 
   const rightBorder = step(0.983, screenUV.x).mul(strength.mul(0.72).clamp(0.0, 1.0));
   y = mix(y, y.mul(0.15), rightBorder);
