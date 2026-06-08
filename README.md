@@ -5,6 +5,7 @@
 </p>
 
 Authentic digital and analog post-processing filters for Three.js.
+
 Beware: digital ISP is not a cheap effect.
 
 ## Play live here.
@@ -81,5 +82,5 @@ Useful controls:
 
 # Acknowledgements
 
-- NTSC/VHS artifact references helped shape the analog mode.
-- OpenISP inspired the camera ISP signal-chain framing.
+- NTSC
+- OpenISP
