@@ -1,7 +1,6 @@
 // PowerSHOT realtime ISP — bootstrap (three.js WebGPU).
 import * as THREE from "three/webgpu";
-import { PRESETS, PRESET_KEYS } from "./presets.js";
-import { Pipeline, applyPreset, STAGE_DEFS } from "./pipeline.js";
+import { Pipeline, PRESETS, PRESET_KEYS, STAGE_DEFS, applyPreset } from "./index.js";
 
 const MAX_WORK = 1600; // cap working resolution for snappy realtime
 const ANALOG_WORK = [720, 540];
@@ -10,6 +9,8 @@ const DEFAULT_IMAGE = `${import.meta.env.BASE_URL}vibe%20coding.jpg`;
 const els = {
   canvas: document.getElementById("view"),
   mode: document.getElementById("mode"),
+  resolution: document.getElementById("resolution"),
+  resolutionval: document.getElementById("resolutionval"),
   preset: document.getElementById("preset"),
   digitalControls: document.getElementById("digital-controls"),
   analogControls: document.getElementById("analog-controls"),
@@ -25,6 +26,18 @@ const els = {
   chromaval: document.getElementById("chromaval"),
   jpeg: document.getElementById("jpeg"),
   jpegval: document.getElementById("jpegval"),
+  jpegquality: document.getElementById("jpegquality"),
+  jpegqualityval: document.getElementById("jpegqualityval"),
+  jpegchroma: document.getElementById("jpegchroma"),
+  jpegchromaval: document.getElementById("jpegchromaval"),
+  jpegmidtone: document.getElementById("jpegmidtone"),
+  jpegmidtoneval: document.getElementById("jpegmidtoneval"),
+  jpeghighlight: document.getElementById("jpeghighlight"),
+  jpeghighlightval: document.getElementById("jpeghighlightval"),
+  brightness: document.getElementById("brightness"),
+  brightnessval: document.getElementById("brightnessval"),
+  contrast: document.getElementById("contrast"),
+  contrastval: document.getElementById("contrastval"),
   analog: document.getElementById("analog"),
   analogval: document.getElementById("analogval"),
   tracking: document.getElementById("tracking"),
@@ -35,6 +48,8 @@ const els = {
   ringingval: document.getElementById("ringingval"),
   tapenoise: document.getElementById("tapenoise"),
   tapenoiseval: document.getElementById("tapenoiseval"),
+  bandmask: document.getElementById("bandmask"),
+  bandmaskval: document.getElementById("bandmaskval"),
   edgewave: document.getElementById("edgewave"),
   edgewaveval: document.getElementById("edgewaveval"),
   dropouts: document.getElementById("dropouts"),
@@ -55,10 +70,13 @@ const els = {
 
 let renderer, pipeline, source = null;
 let frame = 0;
-let mode = "digital";
+let mode = "analog";
 let presetKey = "cybershot";
+let resolutionScale = 0.65;
 let busy = false;
-let freezeNoise = true;
+let freezeNoise = false;
+let outputBrightness = 0;
+let outputContrast = 0;
 
 // fps tracking
 let fpsLast = performance.now();
@@ -80,6 +98,7 @@ async function init() {
   await renderer.init();
 
   pipeline = new Pipeline(renderer);
+  pipeline.setMode(mode);
 
   buildPresetUI();
   buildStageUI();
@@ -129,13 +148,22 @@ function buildStageUI() {
   }
 }
 
+function setSlider(slider, label, value, scale = 100, digits = 2) {
+  slider.value = Math.round(value * scale);
+  label.textContent = digits === 0 ? String(Math.round(value)) : value.toFixed(digits);
+}
+
 function wireInput() {
   els.mode.addEventListener("change", () => {
     mode = els.mode.value;
-    freezeNoise = mode === "digital";
     pipeline.setMode(mode);
     syncModeUI();
     syncFreezeUI();
+    resizeForSource();
+  });
+  els.resolution.addEventListener("input", () => {
+    resolutionScale = Math.min(1, Math.max(0.1, els.resolution.value / 100));
+    els.resolutionval.textContent = `${resolutionScale.toFixed(2)}x`;
     resizeForSource();
   });
   els.lens.addEventListener("input", () => {
@@ -168,6 +196,36 @@ function wireInput() {
     pipeline.ctx.P.jpegStrength.value = v;
     els.jpegval.textContent = v.toFixed(2);
   });
+  els.jpegquality.addEventListener("input", () => {
+    const v = Number(els.jpegquality.value);
+    pipeline.ctx.P.jpegQuality.value = v;
+    els.jpegqualityval.textContent = String(Math.round(v));
+  });
+  els.jpegchroma.addEventListener("input", () => {
+    const v = els.jpegchroma.value / 100;
+    pipeline.ctx.P.jpegChroma420.value = v;
+    els.jpegchromaval.textContent = v.toFixed(2);
+  });
+  els.jpegmidtone.addEventListener("input", () => {
+    const v = els.jpegmidtone.value / 100;
+    pipeline.ctx.P.jpegMidtone.value = v;
+    els.jpegmidtoneval.textContent = v.toFixed(2);
+  });
+  els.jpeghighlight.addEventListener("input", () => {
+    const v = els.jpeghighlight.value / 100;
+    pipeline.ctx.P.jpegHighlight.value = v;
+    els.jpeghighlightval.textContent = v.toFixed(2);
+  });
+  els.brightness.addEventListener("input", () => {
+    outputBrightness = els.brightness.value / 100;
+    pipeline.setOutputColorGrading({ brightness: outputBrightness, contrast: outputContrast });
+    els.brightnessval.textContent = outputBrightness.toFixed(2);
+  });
+  els.contrast.addEventListener("input", () => {
+    outputContrast = els.contrast.value / 100;
+    pipeline.setOutputColorGrading({ brightness: outputBrightness, contrast: outputContrast });
+    els.contrastval.textContent = outputContrast.toFixed(2);
+  });
   els.analog.addEventListener("input", () => {
     const v = els.analog.value / 100;
     pipeline.ctx.P.analogStrength.value = v;
@@ -192,6 +250,11 @@ function wireInput() {
     const v = els.tapenoise.value / 100;
     pipeline.ctx.P.analogTapeNoise.value = v;
     els.tapenoiseval.textContent = v.toFixed(2);
+  });
+  els.bandmask.addEventListener("input", () => {
+    const v = els.bandmask.value / 100;
+    pipeline.ctx.P.analogBandMask.value = v;
+    els.bandmaskval.textContent = v.toFixed(2);
   });
   els.edgewave.addEventListener("input", () => {
     const v = els.edgewave.value / 100;
@@ -263,60 +326,70 @@ function syncEffectUI() {
   syncModeUI();
 
   const lens = pipeline.ctx.P.lensSoftness.value;
-  els.lens.value = Math.round(lens * 100);
-  els.lensval.textContent = lens.toFixed(2);
+  els.resolution.value = Math.round(resolutionScale * 100);
+  els.resolutionval.textContent = `${resolutionScale.toFixed(2)}x`;
+
+  setSlider(els.lens, els.lensval, lens);
 
   const bloom = pipeline.ctx.P.ccdBloom.value;
-  els.bloom.value = Math.round(bloom * 100);
-  els.bloomval.textContent = bloom.toFixed(2);
+  setSlider(els.bloom, els.bloomval, bloom);
 
   const noise = pipeline.ctx.noiseScale.value;
-  els.noise.value = Math.round(noise * 100);
-  els.noiseval.textContent = noise.toFixed(2);
+  setSlider(els.noise, els.noiseval, noise);
 
   const bnr = pipeline.ctx.P.bayerNR.value;
-  els.bayernr.value = Math.round(bnr * 100);
-  els.bayernrval.textContent = bnr.toFixed(2);
+  setSlider(els.bayernr, els.bayernrval, bnr);
+
+  const chroma = pipeline.ctx.P.chromaNR.value;
+  setSlider(els.chroma, els.chromaval, chroma);
 
   const jpeg = pipeline.ctx.P.jpegStrength.value;
-  els.jpeg.value = Math.round(jpeg * 100);
-  els.jpegval.textContent = jpeg.toFixed(2);
+  setSlider(els.jpeg, els.jpegval, jpeg);
+
+  const jpegQuality = pipeline.ctx.P.jpegQuality.value;
+  setSlider(els.jpegquality, els.jpegqualityval, jpegQuality, 1, 0);
+
+  const jpegChroma = pipeline.ctx.P.jpegChroma420.value;
+  setSlider(els.jpegchroma, els.jpegchromaval, jpegChroma);
+
+  const jpegMidtone = pipeline.ctx.P.jpegMidtone.value;
+  setSlider(els.jpegmidtone, els.jpegmidtoneval, jpegMidtone);
+
+  const jpegHighlight = pipeline.ctx.P.jpegHighlight.value;
+  setSlider(els.jpeghighlight, els.jpeghighlightval, jpegHighlight);
+
+  setSlider(els.brightness, els.brightnessval, outputBrightness);
+  setSlider(els.contrast, els.contrastval, outputContrast);
 
   const analog = pipeline.ctx.P.analogStrength.value;
-  els.analog.value = Math.round(analog * 100);
-  els.analogval.textContent = analog.toFixed(2);
+  setSlider(els.analog, els.analogval, analog);
 
   const tracking = pipeline.ctx.P.analogTracking.value;
-  els.tracking.value = Math.round(tracking * 100);
-  els.trackingval.textContent = tracking.toFixed(2);
+  setSlider(els.tracking, els.trackingval, tracking);
 
   const chromaBleed = pipeline.ctx.P.analogChromaBleed.value;
-  els.chromableed.value = Math.round(chromaBleed * 100);
-  els.chromableedval.textContent = chromaBleed.toFixed(2);
+  setSlider(els.chromableed, els.chromableedval, chromaBleed);
 
   const ringing = pipeline.ctx.P.analogRinging.value;
-  els.ringing.value = Math.round(ringing * 100);
-  els.ringingval.textContent = ringing.toFixed(2);
+  setSlider(els.ringing, els.ringingval, ringing);
 
   const tapeNoise = pipeline.ctx.P.analogTapeNoise.value;
-  els.tapenoise.value = Math.round(tapeNoise * 100);
-  els.tapenoiseval.textContent = tapeNoise.toFixed(2);
+  setSlider(els.tapenoise, els.tapenoiseval, tapeNoise);
+
+  const bandMask = pipeline.ctx.P.analogBandMask.value;
+  setSlider(els.bandmask, els.bandmaskval, bandMask);
 
   const edgeWave = pipeline.ctx.P.analogEdgeWave.value;
-  els.edgewave.value = Math.round(edgeWave * 100);
-  els.edgewaveval.textContent = edgeWave.toFixed(2);
+  setSlider(els.edgewave, els.edgewaveval, edgeWave);
 
   const dropouts = pipeline.ctx.P.analogDropouts.value;
-  els.dropouts.value = Math.round(dropouts * 100);
-  els.dropoutsval.textContent = dropouts.toFixed(2);
+  setSlider(els.dropouts, els.dropoutsval, dropouts);
 
   const scanlines = pipeline.ctx.P.analogScanlines.value;
-  els.scanlines.value = Math.round(scanlines * 100);
-  els.scanlinesval.textContent = scanlines.toFixed(2);
+  setSlider(els.scanlines, els.scanlinesval, scanlines);
 
   const headSwitch = pipeline.ctx.P.analogHeadSwitch.value;
-  els.headswitch.value = Math.round(headSwitch * 100);
-  els.headswitchval.textContent = headSwitch.toFixed(2);
+  setSlider(els.headswitch, els.headswitchval, headSwitch);
 
   syncFreezeUI();
 }
@@ -356,12 +429,18 @@ function resizeForSource() {
   if (!source) return;
   const imgW = source.userData.w;
   const imgH = source.userData.h;
-  const sensor = mode === "analog" ? ANALOG_WORK : PRESETS[presetKey].sensor_resolution;
-  const fit = Math.min(sensor[0] / imgW, sensor[1] / imgH, MAX_WORK / imgW, MAX_WORK / imgH, 1.0);
-  let w = Math.round(imgW * fit); w -= w % 2;
-  let h = Math.round(imgH * fit); h -= h % 2;
+  const displaySensor = PRESETS[presetKey].sensor_resolution;
+  const processSensor = mode === "analog" ? ANALOG_WORK : displaySensor;
+  const displayFit = Math.min(displaySensor[0] / imgW, displaySensor[1] / imgH, MAX_WORK / imgW, MAX_WORK / imgH, 1.0);
+  const processFit = Math.min(processSensor[0] / imgW, processSensor[1] / imgH, MAX_WORK / imgW, MAX_WORK / imgH, 1.0);
+  let displayW = Math.max(2, Math.round(imgW * displayFit)); displayW -= displayW % 2;
+  let displayH = Math.max(2, Math.round(imgH * displayFit)); displayH -= displayH % 2;
+  let w = Math.max(2, Math.round(imgW * processFit * resolutionScale)); w -= w % 2;
+  let h = Math.max(2, Math.round(imgH * processFit * resolutionScale)); h -= h % 2;
 
   renderer.setSize(w, h, false);
+  els.canvas.style.width = `${displayW}px`;
+  els.canvas.style.height = `${displayH}px`;
   pipeline.setSize(w, h);
 }
 
@@ -389,7 +468,7 @@ async function tick() {
     fpsLast = now; fpsCount = 0;
     const r = pipeline.ctx.resolution.value;
     const frozen = freezeNoise ? " · frozen" : "";
-    const modeLabel = mode === "analog" ? "Analog VHS" : PRESETS[presetKey].name;
+    const modeLabel = mode === "analog" ? "Analog" : PRESETS[presetKey].name;
     const stageLabel = mode === "analog" ? "analog mode" : `${pipeline.enabled.size}/${STAGE_DEFS.length} stages`;
     setStatus(`${modeLabel}\n${r.x}×${r.y} · ${fps} fps · ${stageLabel}${frozen}`);
   }

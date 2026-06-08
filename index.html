@@ -12,11 +12,16 @@
     <h1>PowerSHOT<small>realtime ISP · WebGPU / TSL</small></h1>
 
     <div>
-      <label for="mode">Mode</label>
+      <label for="mode">Signal</label>
       <select id="mode">
-        <option value="digital">Digital camera</option>
-        <option value="analog">Analog VHS</option>
+        <option value="analog">Analog</option>
+        <option value="digital">Digital</option>
       </select>
+    </div>
+
+    <div>
+      <label for="resolution">Resolution · <span id="resolutionval">0.65x</span></label>
+      <input id="resolution" type="range" min="10" max="100" step="5" value="65">
     </div>
 
     <div id="digital-controls">
@@ -54,52 +59,87 @@
       <label for="jpeg">JPEG DCT · <span id="jpegval">0.20</span></label>
       <input id="jpeg" type="range" min="0" max="300" value="20">
     </div>
+
+    <div>
+      <label for="jpegquality">JPEG quality · <span id="jpegqualityval">58</span></label>
+      <input id="jpegquality" type="range" min="1" max="100" value="58">
+    </div>
+
+    <div>
+      <label for="jpegchroma">JPEG chroma · <span id="jpegchromaval">0.75</span></label>
+      <input id="jpegchroma" type="range" min="0" max="100" value="75">
+    </div>
+
+    <div>
+      <label for="jpegmidtone">JPEG midtones · <span id="jpegmidtoneval">0.45</span></label>
+      <input id="jpegmidtone" type="range" min="0" max="100" value="45">
+    </div>
+
+    <div>
+      <label for="jpeghighlight">JPEG highlights · <span id="jpeghighlightval">1.00</span></label>
+      <input id="jpeghighlight" type="range" min="0" max="200" value="100">
+    </div>
+
+    <div>
+      <label for="brightness">Brightness · <span id="brightnessval">0.00</span></label>
+      <input id="brightness" type="range" min="-100" max="100" value="0">
+    </div>
+
+    <div>
+      <label for="contrast">Contrast · <span id="contrastval">0.00</span></label>
+      <input id="contrast" type="range" min="-100" max="100" value="0">
+    </div>
     </div>
 
     <div id="analog-controls" hidden>
       <div>
-        <label for="analog">VHS amount · <span id="analogval">0.65</span></label>
-        <input id="analog" type="range" min="0" max="300" value="65">
+        <label for="analog">VHS amount · <span id="analogval">3.00</span></label>
+        <input id="analog" type="range" min="0" max="300" value="300">
       </div>
 
       <div>
-        <label for="tracking">Tracking · <span id="trackingval">0.45</span></label>
-        <input id="tracking" type="range" min="0" max="300" value="45">
+        <label for="tracking">Tracking · <span id="trackingval">0.12</span></label>
+        <input id="tracking" type="range" min="0" max="300" value="12">
       </div>
 
       <div>
-        <label for="chromableed">Chroma bleed · <span id="chromableedval">0.75</span></label>
-        <input id="chromableed" type="range" min="0" max="300" value="75">
+        <label for="chromableed">Chroma bleed · <span id="chromableedval">3.00</span></label>
+        <input id="chromableed" type="range" min="0" max="300" value="300">
       </div>
 
       <div>
-        <label for="ringing">Ringing · <span id="ringingval">0.65</span></label>
-        <input id="ringing" type="range" min="0" max="300" value="65">
+        <label for="ringing">Ringing · <span id="ringingval">2.40</span></label>
+        <input id="ringing" type="range" min="0" max="300" value="240">
       </div>
 
       <div>
-        <label for="tapenoise">Tape noise · <span id="tapenoiseval">0.75</span></label>
-        <input id="tapenoise" type="range" min="0" max="300" value="75">
+        <label for="tapenoise">Tape noise · <span id="tapenoiseval">0.73</span></label>
+        <input id="tapenoise" type="range" min="0" max="300" value="73">
       </div>
 
       <div>
-        <label for="edgewave">Edge wave · <span id="edgewaveval">0.35</span></label>
-        <input id="edgewave" type="range" min="0" max="300" value="35">
+        <label for="bandmask">Band mask · <span id="bandmaskval">0.62</span></label>
+        <input id="bandmask" type="range" min="0" max="300" value="62">
       </div>
 
       <div>
-        <label for="dropouts">Dropouts · <span id="dropoutsval">0.35</span></label>
-        <input id="dropouts" type="range" min="0" max="300" value="35">
+        <label for="edgewave">Edge wave · <span id="edgewaveval">0.46</span></label>
+        <input id="edgewave" type="range" min="0" max="300" value="46">
       </div>
 
       <div>
-        <label for="scanlines">Scanlines · <span id="scanlinesval">0.55</span></label>
-        <input id="scanlines" type="range" min="0" max="300" value="55">
+        <label for="dropouts">Dropouts · <span id="dropoutsval">1.66</span></label>
+        <input id="dropouts" type="range" min="0" max="300" value="166">
       </div>
 
       <div>
-        <label for="headswitch">Head switch · <span id="headswitchval">0.45</span></label>
-        <input id="headswitch" type="range" min="0" max="300" value="45">
+        <label for="scanlines">Scanlines · <span id="scanlinesval">1.82</span></label>
+        <input id="scanlines" type="range" min="0" max="300" value="182">
+      </div>
+
+      <div>
+        <label for="headswitch">Head switch · <span id="headswitchval">0.12</span></label>
+        <input id="headswitch" type="range" min="0" max="300" value="12">
       </div>
     </div>
 

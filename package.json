@@ -1,19 +1,48 @@
 {
   "name": "powershot-threejs",
   "version": "0.1.0",
-  "private": true,
+  "description": "Authentic digital camera ISP and analog signal post-processing for Three.js WebGPU.",
+  "license": "MIT",
   "homepage": "https://cl0nazepamm.github.io/powershot-threejs/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cl0nazepamm/powershot-threejs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cl0nazepamm/powershot-threejs/issues"
+  },
   "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.js",
+    "./pipeline": "./src/pipeline.js",
+    "./presets": "./src/presets.js"
+  },
+  "files": [
+    "src/index.js",
+    "src/pipeline.js",
+    "src/presets.js",
+    "README.md"
+  ],
+  "keywords": [
+    "threejs",
+    "webgpu",
+    "postprocessing",
+    "isp",
+    "vhs",
+    "ntsc"
+  ],
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "check": "node --check src/main.js && node --check src/pipeline.js && node --check src/presets.js"
+    "check": "node --check src/index.js && node --check src/main.js && node --check src/pipeline.js && node --check src/presets.js"
   },
   "devDependencies": {
+    "three": "^0.184.0",
     "vite": "^8.0.16"
   },
-  "dependencies": {
+  "peerDependencies": {
     "three": "^0.184.0"
   }
 }

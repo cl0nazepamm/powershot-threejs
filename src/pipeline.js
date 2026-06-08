@@ -161,7 +161,10 @@ function stCcdBloom(tex, ctx) {
 // --- Bayer domain ---
 
 function stMosaic(tex, ctx) {
-  const c = texture(tex, screenUV).rgb;
+  return mosaicColor(texture(tex, screenUV).rgb, ctx);
+}
+
+function mosaicColor(c, ctx) {
   const ph = bayerPhase(screenUV, ctx);
   const bayer = c.r.mul(ph.isR)
     .add(c.g.mul(ph.isGr.add(ph.isGb)))
@@ -170,7 +173,11 @@ function stMosaic(tex, ctx) {
 }
 
 function stWhiteBalance(tex, ctx) {
-  const b = texture(tex, screenUV).r;
+  return whiteBalanceColor(texture(tex, screenUV).rgb, ctx);
+}
+
+function whiteBalanceColor(c, ctx) {
+  const b = c.r;
   const ph = bayerPhase(screenUV, ctx);
   const gain = ctx.P.wbR.mul(ph.isR)
     .add(ctx.P.wbG.mul(ph.isGr.add(ph.isGb)))
@@ -179,8 +186,11 @@ function stWhiteBalance(tex, ctx) {
 }
 
 function stBlackLevel(tex, ctx) {
-  const b = texture(tex, screenUV).r;
-  return vec3(blackLevelValue(b, ctx));
+  return blackLevelColor(texture(tex, screenUV).rgb, ctx);
+}
+
+function blackLevelColor(c, ctx) {
+  return vec3(blackLevelValue(c.r, ctx));
 }
 
 function blackLevelValue(b, ctx) {
@@ -208,8 +218,11 @@ function samePhase3x3(tex, ctx) {
 }
 
 function stBayerNoise(tex, ctx) {
-  const b = texture(tex, screenUV).r;
-  return vec3(bayerNoiseValue(b, ctx));
+  return bayerNoiseColor(texture(tex, screenUV).rgb, ctx);
+}
+
+function bayerNoiseColor(c, ctx) {
+  return vec3(bayerNoiseValue(c.r, ctx));
 }
 
 function bayerNoiseValue(b, ctx) {
@@ -235,11 +248,6 @@ function bayerNoiseValue(b, ctx) {
   sig = sig.add(read).add(shot);
 
   return sig.clamp(0.0, LEVELS);
-}
-
-function stBlackLevelNoise(tex, ctx) {
-  const b = blackLevelValue(texture(tex, screenUV).r, ctx);
-  return vec3(bayerNoiseValue(b, ctx));
 }
 
 // Remove isolated Bayer-domain hot/dead samples before they demosaic into
@@ -445,8 +453,21 @@ function vignetteColor(c, ctx) {
   return c.mul(falloff).clamp(0.0, LEVELS);
 }
 
-function stRgbPointStack(tex, ctx, ids) {
+function stDigitalPointStack(tex, ctx, ids) {
   let c = texture(tex, screenUV).rgb;
+  return digitalPointStackColor(c, ctx, ids);
+}
+
+function stInputDigitalPointStack(tex, ctx, ids) {
+  let c = texture(tex, screenUV).rgb.mul(LEVELS);
+  return digitalPointStackColor(c, ctx, ids);
+}
+
+function digitalPointStackColor(c, ctx, ids) {
+  if (ids.has("mosaic")) c = mosaicColor(c, ctx);
+  if (ids.has("blacklevel")) c = blackLevelColor(c, ctx);
+  if (ids.has("noise")) c = bayerNoiseColor(c, ctx);
+  if (ids.has("wb")) c = whiteBalanceColor(c, ctx);
   if (ids.has("ccm")) c = ccmColor(c, ctx);
   if (ids.has("tone")) c = toneColor(c, ctx);
   if (ids.has("saturation")) c = saturationColor(c, ctx);
@@ -498,6 +519,11 @@ function softBand(value, start, end) {
   return value.sub(start).div(end - start).clamp(0.0, 1.0);
 }
 
+function smoothBand(value, start, end) {
+  const t = softBand(value, start, end);
+  return t.mul(t).mul(float(3.0).sub(t.mul(2.0)));
+}
+
 function analogSampleYcc(tex, ctx, uv, pxOffset) {
   return rgbToYCbCr(texture(tex, uv.add(ctx.texel.mul(pxOffset))).rgb);
 }
@@ -514,6 +540,7 @@ function stAnalogVhs(tex, ctx) {
   const chromaBleed = ctx.P.analogChromaBleed.clamp(0.0, 3.0);
   const ringing = ctx.P.analogRinging.clamp(0.0, 3.0);
   const tapeNoise = ctx.P.analogTapeNoise.clamp(0.0, 3.0);
+  const bandMask = ctx.P.analogBandMask.clamp(0.0, 3.0);
   const edgeWaveAmount = ctx.P.analogEdgeWave.clamp(0.0, 3.0);
   const dropoutAmount = ctx.P.analogDropouts.clamp(0.0, 3.0);
   const scanlines = ctx.P.analogScanlines.clamp(0.0, 3.0);
@@ -531,7 +558,12 @@ function stAnalogVhs(tex, ctx) {
   const headAttack = belowHead.div(0.012).clamp(0.0, 1.0);
   const headFalloff = exp(belowHead.mul(-17.0)).mul(afterHead);
   const headTail = float(1.0).sub(belowHead.div(0.22).clamp(0.0, 1.0)).mul(afterHead);
-  const headMask = headAttack.mul(headFalloff.mul(0.8).add(headTail.mul(0.2))).mul(headSwitch).clamp(0.0, 1.0);
+  const headXFeather = smoothBand(screenUV.x, 0.012, 0.055)
+    .mul(float(1.0).sub(smoothBand(screenUV.x, 0.945, 0.988)));
+  const headMask = headAttack.mul(headFalloff.mul(0.8).add(headTail.mul(0.2)))
+    .mul(headXFeather)
+    .mul(headSwitch)
+    .clamp(0.0, 1.0);
   const headNoise = hash12(vec2(fieldLine.mul(0.73), floor(t.mul(47.0))).add(91.3)).sub(0.5);
   const headLineBreak = step(0.58, hash12(vec2(fieldLine.mul(1.91), floor(ctx.frame.mul(0.19))).add(117.0)));
   const headPhaseShift = headNoise.mul(24.0).add(headLineBreak.mul(headNoise.mul(20.0)));
@@ -595,19 +627,35 @@ function stAnalogVhs(tex, ctx) {
   ).mul(tapeNoise.mul(1.35));
   chroma = chroma.add(chromaNoise).add(vec2(carrier.mul(crawl).mul(0.34), carrierQ.mul(crawl).mul(-0.22)));
 
-  const dropoutSeed = hash12(vec2(fieldLine.mul(0.071), floor(ctx.frame.mul(0.13))).add(73.0));
-  const dropoutGate = step(float(1.0).sub(dropoutAmount.mul(0.045).clamp(0.0, 0.22)), dropoutSeed);
-  const dropoutBand = dropoutGate.mul(softBand(fract(p.x.mul(0.003).add(dropoutSeed)), 0.1, 0.9));
-  const chromaLoss = dropoutBand.mul(dropoutAmount.mul(0.85)).clamp(0.0, 1.0);
+  const dropoutFrame = floor(ctx.frame.mul(0.13));
+  const dropoutLineSeed = hash13(vec3(fieldLine.mul(2.37), dropoutFrame, 73.0));
+  const dropoutSegmentWidth = float(88.0).add(hash12(vec2(fieldLine, dropoutFrame).add(19.0)).mul(96.0));
+  const dropoutSegment = floor(p.x.div(dropoutSegmentWidth));
+  const dropoutSegmentSeed = hash13(vec3(
+    dropoutSegment.mul(5.37).add(dropoutLineSeed.mul(17.0)),
+    fieldLine.mul(3.11),
+    dropoutFrame.add(73.0),
+  ));
+  const dropoutLineGate = step(float(1.0).sub(dropoutAmount.mul(0.075).clamp(0.0, 0.26)), dropoutLineSeed);
+  const dropoutSegmentGate = step(float(1.0).sub(dropoutAmount.mul(0.32).clamp(0.0, 0.92)), dropoutSegmentSeed);
+  const dropoutSegmentPos = fract(p.x.div(dropoutSegmentWidth).add(dropoutLineSeed));
+  const dropoutSegmentEnvelope = softBand(dropoutSegmentPos, 0.04, 0.18)
+    .mul(float(1.0).sub(softBand(dropoutSegmentPos, 0.74, 0.96)));
+  const dropoutBand = dropoutLineGate.mul(dropoutSegmentGate).mul(dropoutSegmentEnvelope);
+  const bandDamage = dropoutAmount.mul(bandMask);
+  const chromaLoss = dropoutBand.mul(bandDamage.mul(0.85)).clamp(0.0, 1.0);
   chroma = mix(chroma, chroma.mul(0.08), chromaLoss);
-  y = y.add(dropoutBand.mul(hash12(vec2(p.x, ctx.frame).add(12.0)).sub(0.5)).mul(tapeNoise.mul(dropoutAmount).mul(34.0)));
+  const dropoutStatic = hash13(vec3(p.x.mul(0.91), p.y.mul(1.73), ctx.frame.add(12.0))).sub(0.5);
+  y = y.add(dropoutBand.mul(dropoutStatic).mul(tapeNoise.mul(bandDamage).mul(34.0)));
 
   const scan = sin(p.y.mul(3.1415927)).mul(0.5).add(0.5);
   const interlace = step(0.5, mod(p.y.add(ctx.frame), 2.0));
   y = y.mul(float(1.0).sub(scan.mul(scanlines.mul(0.055))).sub(interlace.mul(scanlines.mul(0.025))));
   y = y.add(gaussTemporal(p, ctx.frame, 211.0).mul(tapeNoise.mul(1.6)));
 
-  const headLine = float(1.0).sub(abs(belowHead).div(0.005).clamp(0.0, 1.0)).mul(headSwitch);
+  const headLine = float(1.0).sub(abs(belowHead).div(0.018).clamp(0.0, 1.0))
+    .mul(headXFeather)
+    .mul(headSwitch.mul(0.34));
   const headStatic = gaussTemporal(p, ctx.frame, 319.0).mul(0.62)
     .add(hash13(vec3(p.x.mul(0.31), p.y.mul(1.7), ctx.frame.mul(0.21))).sub(0.5));
   const headLumaNoise = headStatic.mul(tapeNoise.mul(38.0)).mul(headMask);
@@ -673,10 +721,10 @@ function jpegAmount(ctx) {
 
 function jpegHighlightAmount(original, ctx) {
   const luma = dot(original, LUMA).div(LEVELS).clamp(0.0, 1.0);
-  const midtoneLift = luma.sub(0.18).div(0.36).clamp(0.0, 1.0).mul(0.18);
-  const highlight = luma.sub(0.30).div(0.55).clamp(0.0, 1.0).pow(1.25);
-  const mask = max(midtoneLift, highlight).clamp(0.0, 1.0);
-  return jpegAmount(ctx).mul(mask);
+  const midtone = luma.sub(0.08).div(0.42).clamp(0.0, 1.0).mul(ctx.P.jpegMidtone);
+  const highlight = luma.sub(0.24).div(0.58).clamp(0.0, 1.0).pow(0.85).mul(ctx.P.jpegHighlight);
+  const mask = max(midtone, highlight).clamp(0.0, 1.0);
+  return jpegAmount(ctx).pow(0.55).mul(mask);
 }
 
 const JPEG_LUMA_Q = [
@@ -777,9 +825,13 @@ function stOutput(tex, ctx) {
   return texture(tex, screenUV).rgb.div(LEVELS);
 }
 
-function powershotOutputAlpha(sourceSample, finalColor) {
+function powershotOutputColorGrading(color, ctx) {
+  return color.mul(ctx.outputBrightness.add(1.0)).sub(0.5).mul(ctx.outputContrast.add(1.0)).add(0.5);
+}
+
+function powershotOutputAlpha(sourceSample, effectColor) {
   const sourceAlpha = sourceSample.a.clamp(0.0, 1.0);
-  const effectDelta = dot(abs(finalColor.sub(sourceSample.rgb)), LUMA);
+  const effectDelta = dot(abs(effectColor.sub(sourceSample.rgb)), LUMA);
   const effectAlpha = effectDelta.sub(0.002).mul(6.0).clamp(0.0, 0.65);
   return sourceAlpha.add(effectAlpha.mul(sourceAlpha.oneMinus())).clamp(0.0, 1.0);
 }
@@ -814,7 +866,10 @@ export const ANALOG_STAGE_DEFS = [
   { id: "analog", label: "Analog VHS / NTSC", make: stAnalogVhs },
 ];
 
-const RGB_POINT_STAGE_IDS = new Set(["ccm", "tone", "saturation", "vignette"]);
+const DIGITAL_POINT_STAGE_IDS = new Set([
+  "mosaic", "blacklevel", "noise", "wb",
+  "ccm", "tone", "saturation", "vignette",
+]);
 
 // ---------------------------------------------------------------------------
 // uniforms built per preset (so we can hot-swap without rebuilding nodes)
@@ -825,10 +880,13 @@ export function makeUniforms() {
     resolution: uniform(new THREE.Vector2(1, 1)),
     texel: uniform(new THREE.Vector2(1, 1)),
     frame: uniform(0),
+    power: uniform(1),
     // global noise trim: raw Bayer noise is injected, then reduced in later stages
     // down through Bayer/RGB denoising, so we scale the injection to roughly
     // what survives the realtime subset.
     noiseScale: uniform(1.06),
+    outputBrightness: uniform(0),
+    outputContrast: uniform(0),
     P: {
       barrel: uniform(0), ca: uniform(0),
       lensSoftness: uniform(0.25),
@@ -846,9 +904,10 @@ export function makeUniforms() {
       hiClip: uniform(255), gamma: uniform(1), shadow: uniform(0), sat: uniform(1),
       vignette: uniform(0), eeGain: uniform(0), eeThresh: uniform(0),
       jpegQuality: uniform(60), jpegStrength: uniform(0.2), jpegChroma420: uniform(0.75),
+      jpegMidtone: uniform(0.45), jpegHighlight: uniform(1.0),
       analogStrength: uniform(0.65), analogTracking: uniform(0.45),
       analogChromaBleed: uniform(0.75), analogRinging: uniform(0.65), analogTapeNoise: uniform(0.75),
-      analogEdgeWave: uniform(0.35), analogDropouts: uniform(0.35), analogScanlines: uniform(0.55),
+      analogBandMask: uniform(0.35), analogEdgeWave: uniform(0.35), analogDropouts: uniform(0.35), analogScanlines: uniform(0.55),
       analogHeadSwitch: uniform(0.45),
     },
   };
@@ -894,11 +953,15 @@ export function applyPreset(ctx, preset) {
   P.eeThresh.value = preset.ee_threshold;
   P.jpegQuality.value = preset.jpeg_quality;
   P.jpegStrength.value = 0.2;
+  P.jpegChroma420.value = 0.75;
+  P.jpegMidtone.value = 0.45;
+  P.jpegHighlight.value = 1.0;
   P.analogStrength.value = preset.analog_vhs_strength ?? 0.65;
   P.analogTracking.value = preset.analog_tracking ?? 0.45;
   P.analogChromaBleed.value = preset.analog_chroma_bleed ?? 0.75;
   P.analogRinging.value = preset.analog_ringing ?? 0.65;
   P.analogTapeNoise.value = preset.analog_tape_noise ?? 0.75;
+  P.analogBandMask.value = preset.analog_band_mask ?? 0.35;
   P.analogEdgeWave.value = preset.analog_edge_wave ?? 0.35;
   P.analogDropouts.value = preset.analog_dropouts ?? 0.35;
   P.analogScanlines.value = preset.analog_scanlines ?? 0.55;
@@ -957,7 +1020,11 @@ export class Pipeline {
     return m;
   }
 
-  setSource(tex) { this.source = tex; this.dirty = true; }
+  setSource(tex) {
+    if (this.source === tex) return;
+    this.source = tex;
+    this.dirty = true;
+  }
 
   setSize(w, h) {
     if (w === this.size.w && h === this.size.h) return;
@@ -971,15 +1038,24 @@ export class Pipeline {
   }
 
   setEnabled(id, on) {
+    const hasStage = this.enabled.has(id);
+    if (on === hasStage) return;
     if (on) this.enabled.add(id);
     else this.enabled.delete(id);
     this.dirty = true;
   }
 
   setMode(mode) {
-    if (mode === this.mode) return;
-    this.mode = mode;
+    const next = mode === "analog" ? "analog" : "digital";
+    if (next === this.mode) return;
+    this.mode = next;
     this.dirty = true;
+  }
+
+  setOutputColorGrading({ brightness = 0, contrast = 0 } = {}) {
+    this.ctx.outputBrightness.value = Number.isFinite(brightness) ? brightness : 0;
+    this.ctx.outputContrast.value = Number.isFinite(contrast) ? contrast : 0;
+    if (this.outputMat) this.outputMat.needsUpdate = true;
   }
 
   _rebuild() {
@@ -989,8 +1065,29 @@ export class Pipeline {
     this.dirty = false;
     if (!this.source) { this.outputMat = null; return; }
 
-    // mandatory input + downsample pass: 0..1 source -> 0..255 in rtA.
-    this.steps.push({ material: this._mat(stInput(this.source, this.ctx)), target: this.rtA });
+    const active = this.mode === "analog"
+      ? ANALOG_STAGE_DEFS
+      : STAGE_DEFS.filter((s) => this.enabled.has(s.id));
+    let read = this.rtA;
+    let write = this.rtB;
+    let startIndex = 0;
+
+    // Mandatory input/downsample is point-only, so fold it into the first
+    // digital point-stage run when no earlier resampling stage is active.
+    if (this.mode === "digital" && active.length > 0 && DIGITAL_POINT_STAGE_IDS.has(active[0].id)) {
+      const ids = [];
+      while (startIndex < active.length && DIGITAL_POINT_STAGE_IDS.has(active[startIndex].id)) {
+        ids.push(active[startIndex].id);
+        startIndex += 1;
+      }
+      this.steps.push({
+        material: this._mat(stInputDigitalPointStack(this.source, this.ctx, new Set(ids))),
+        target: this.rtA,
+      });
+    } else {
+      // mandatory input + downsample pass: 0..1 source -> 0..255 in rtA.
+      this.steps.push({ material: this._mat(stInput(this.source, this.ctx)), target: this.rtA });
+    }
 
     const appendSingle = (make) => {
       this.steps.push({ material: this._mat(make(read.texture, this.ctx)), target: write });
@@ -998,28 +1095,18 @@ export class Pipeline {
     };
 
     // ping-pong the active stages across rtA/rtB with baked input textures
-    let read = this.rtA;
-    let write = this.rtB;
-    const active = this.mode === "analog"
-      ? ANALOG_STAGE_DEFS
-      : STAGE_DEFS.filter((s) => this.enabled.has(s.id));
-    for (let i = 0; i < active.length; i += 1) {
+    for (let i = startIndex; i < active.length; i += 1) {
       const stage = active[i];
-      if (stage.id === "blacklevel" && active[i + 1]?.id === "noise") {
-        appendSingle(stBlackLevelNoise);
-        i += 1;
-        continue;
-      }
-      if (RGB_POINT_STAGE_IDS.has(stage.id)) {
+      if (DIGITAL_POINT_STAGE_IDS.has(stage.id)) {
         const ids = [];
         let j = i;
-        while (j < active.length && RGB_POINT_STAGE_IDS.has(active[j].id)) {
+        while (j < active.length && DIGITAL_POINT_STAGE_IDS.has(active[j].id)) {
           ids.push(active[j].id);
           j += 1;
         }
         if (ids.length > 1) {
           const idSet = new Set(ids);
-          appendSingle((tex, ctx) => stRgbPointStack(tex, ctx, idSet));
+          appendSingle((tex, ctx) => stDigitalPointStack(tex, ctx, idSet));
           i = j - 1;
           continue;
         }
@@ -1038,27 +1125,52 @@ export class Pipeline {
 
     const finalTex = this.steps[this.steps.length - 1].target.texture;
     const sourceSample = texture(this.source, screenUV);
-    const finalColor = stOutput(finalTex, this.ctx);
-    this.outputMat = this._mat(vec4(finalColor, powershotOutputAlpha(sourceSample, finalColor)));
+    const effectColor = mix(sourceSample.rgb, stOutput(finalTex, this.ctx), this.ctx.power);
+    const finalColor = powershotOutputColorGrading(effectColor, this.ctx);
+    this.outputMat = this._mat(vec4(finalColor, powershotOutputAlpha(sourceSample, effectColor)));
+    this.outputMat.toneMapped = false;
     this.outputMat.transparent = true;
     this.outputMat.blending = THREE.NoBlending;
   }
 
-  // run the chain and present to screen
-  async render(frame) {
+  renderTexture(inputTexture, frame = 0, { outputTarget = null } = {}) {
+    if (!inputTexture) return false;
+    this.setSource(inputTexture);
     if (this.dirty) this._rebuild();
-    if (!this.source || !this.outputMat) return;
+    if (!this.source || !this.outputMat) return false;
     this.ctx.frame.value = frame;
     const r = this.renderer;
+    const previousTarget = r.getRenderTarget?.() ?? null;
 
-    for (const step of this.steps) {
-      this.mesh.material = step.material;
-      r.setRenderTarget(step.target);
-      await r.renderAsync(this.quadScene, this.quadCam);
+    try {
+      for (const step of this.steps) {
+        this.mesh.material = step.material;
+        r.setRenderTarget(step.target);
+        r.render(this.quadScene, this.quadCam);
+      }
+
+      this.mesh.material = this.outputMat;
+      r.setRenderTarget(outputTarget);
+      r.render(this.quadScene, this.quadCam);
+      return true;
+    } finally {
+      r.setRenderTarget(previousTarget);
     }
+  }
 
-    this.mesh.material = this.outputMat;
-    r.setRenderTarget(null);
-    await r.renderAsync(this.quadScene, this.quadCam);
+  // run the chain and present to screen
+  async render(frame) {
+    this.renderTexture(this.source, frame);
+  }
+
+  dispose() {
+    for (const s of this.steps) s.material.dispose();
+    this.steps = [];
+    if (this.outputMat) this.outputMat.dispose();
+    this.outputMat = null;
+    this.rtA.dispose();
+    this.rtB.dispose();
+    this.rtC.dispose();
+    this.mesh.geometry.dispose();
   }
 }

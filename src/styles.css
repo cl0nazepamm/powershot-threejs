@@ -61,11 +61,12 @@ body {
 #panel {
   height: calc(100vh - 24px);
   margin: 12px 12px 12px 0;
-  padding: 42px 12px 12px;
+  padding: 44px 16px 14px 12px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 13px;
   color: #111;
   background:
     repeating-linear-gradient(0deg, rgba(255,255,255,0.18), rgba(255,255,255,0.18) 1px, transparent 1px, transparent 4px),
@@ -118,15 +119,37 @@ h1 small {
 
 label {
   display: block;
-  margin-bottom: 5px;
+  margin: 0 0 6px;
   color: #222;
   font: 900 10px/1 var(--sans);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
+#digital-controls,
+#analog-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+#digital-controls[hidden],
+#analog-controls[hidden] {
+  display: none;
+}
+
+#panel > div,
+#digital-controls > div,
+#analog-controls > div,
+#stage-controls {
+  min-width: 0;
+}
+
 input[type="range"] {
-  width: 100%;
+  display: block;
+  width: calc(100% - 4px);
+  margin: 0 2px;
   accent-color: #222;
 }
 
@@ -171,8 +194,8 @@ button.active {
 .stages {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px;
+  gap: 3px;
+  padding: 8px;
   border: 1px solid #555;
   border-radius: 4px;
   background: linear-gradient(to bottom, #dadada, #c7c7c7);
@@ -184,7 +207,7 @@ button.active {
   align-items: center;
   gap: 8px;
   margin: 0;
-  padding: 4px;
+  padding: 5px 4px;
   border-radius: 3px;
   font: 800 10px/1.2 var(--mono);
   letter-spacing: 0;
