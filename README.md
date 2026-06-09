@@ -6,8 +6,6 @@
 
 Authentic digital and analog post-processing filters for Three.js.
 
-Beware: digital ISP is not a cheap effect.
-
 ## Play live here.
 
 https://cl0nazepamm.github.io/powershot-threejs/
