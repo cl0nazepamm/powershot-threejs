@@ -142,20 +142,42 @@ function bloomSource(c, ctx) {
 // CCD column bleed: bright saturated charge smears vertically before CFA
 // sampling. Use dense column integration; sparse far taps create repeated
 // highlight ghosts instead of a continuous readout smear.
-function stCcdBloom(tex, ctx) {
+//
+// Split into three passes for speed: the smear is band-limited by its own
+// exp(-|dy|/24) kernel, so it can be integrated at quarter vertical
+// resolution with no visible difference. Pass 1 extracts the thresholded
+// bloom source at full width / quarter height (thresholding stays per-pixel:
+// each quarter row explicitly averages its 4 masked source rows). Pass 2
+// smears vertically in quarter space — every source row participates, which
+// is denser integration than the old step-2 tap ladder. Pass 3 composites
+// the bilinearly-upsampled smear over the full-res image.
+function stCcdBloomExtract(tex, ctx) {
+  // runs on the quarter-height target; screenUV.y lands on the exact center
+  // of each 4-row group, so dy = ±0.5/±1.5 hits the 4 row centers exactly.
   const t = ctx.texel;
-  const c = texture(tex, screenUV).rgb;
-  let smear = vec3(0.0);
-  let wsum = float(0.0);
-
-  for (let dy = -64; dy <= 64; dy += 2) {
-    const ady = Math.abs(dy);
-    const w = Math.exp(-ady / 24.0) * (1.0 - ady / 96.0);
-    smear = smear.add(bloomSource(tapPx(tex, screenUV, t, 0, dy).rgb, ctx).mul(w));
-    wsum = wsum.add(w);
+  let sum = vec3(0.0);
+  for (const dy of [-1.5, -0.5, 0.5, 1.5]) {
+    sum = sum.add(bloomSource(tapPx(tex, screenUV, t, 0, dy).rgb, ctx));
   }
+  return sum.mul(0.25);
+}
 
-  return c.add(smear.div(wsum).mul(ctx.P.ccdBloom)).clamp(0.0, LEVELS);
+function stCcdBloomSmear(tex, ctx) {
+  let smear = vec3(0.0);
+  let wsum = 0.0;
+  for (let qdy = -16; qdy <= 16; qdy += 1) {
+    const ady = Math.abs(qdy * 4);
+    const w = Math.exp(-ady / 24.0) * (1.0 - ady / 96.0);
+    smear = smear.add(texture(tex, screenUV.add(ctx.bloomTexel.mul(vec2(0.0, qdy)))).rgb.mul(w));
+    wsum += w;
+  }
+  return smear.div(wsum);
+}
+
+function stCcdBloomComposite(tex, ctx, smearTex) {
+  const c = texture(tex, screenUV).rgb;
+  const smear = texture(smearTex, screenUV).rgb;
+  return c.add(smear.mul(ctx.P.ccdBloom)).clamp(0.0, LEVELS);
 }
 
 // --- Bayer domain ---
@@ -283,15 +305,16 @@ function greenGuideAt(tex, ctx, uvN) {
   return mix(guide, b, isGreen);
 }
 
-function bnrTap(tex, ctx, centerGuide, dx, dy, spatialW) {
-  const uv = screenUV.add(ctx.texel.mul(vec2(dx, dy)));
-  const n = tapPx(tex, screenUV, ctx.texel, dx, dy).r;
-  const guide = greenGuideAt(tex, ctx, uv);
-  const diff = guide.sub(centerGuide);
-  const rangeSigma = max(ctx.P.bnrRange, float(1e-3));
-  const rangeW = exp(diff.mul(diff).div(rangeSigma.mul(rangeSigma).mul(-2.0)));
-  const w = rangeW.mul(spatialW);
-  return { sum: n.mul(w), w };
+// Joint bilateral Bayer NR, split into two passes. The naive single-pass form
+// recomputes the 9-tap green guide for all 25 footprint pixels (~250 fetches);
+// instead pass 1 computes each pixel's guide once and packs it next to the
+// Bayer value (the Bayer-domain image is replicated grey, so .g is free), and
+// pass 2 reads value+guide together — one fetch per tap. Same math, ~10x fewer
+// fetches.
+function stBnrGuide(tex, ctx) {
+  const b = texture(tex, screenUV).r;
+  const guide = greenGuideAt(tex, ctx, screenUV);
+  return vec3(b, guide, b);
 }
 
 // Compact realtime stand-in for the Python joint bilateral Bayer NR. It filters
@@ -299,9 +322,11 @@ function bnrTap(tex, ctx, centerGuide, dx, dy, spatialW) {
 // becoming stable red/blue dots in the RGB image.
 function stBayerDenoise(tex, ctx) {
   const strength = ctx.P.bayerNR;
-  const c = texture(tex, screenUV).r;
-  const centerGuide = greenGuideAt(tex, ctx, screenUV);
+  const center = texture(tex, screenUV);
+  const c = center.r;
+  const centerGuide = center.g;
   const spatialSigma = max(ctx.P.bnrSpatial, float(1e-3));
+  const rangeSigma = max(ctx.P.bnrRange, float(1e-3));
   let sum = c;
   let wsum = float(1.0);
 
@@ -314,9 +339,12 @@ function stBayerDenoise(tex, ctx) {
   ]) {
     const dist2 = float(sx * sx + sy * sy);
     const spatialW = exp(dist2.div(spatialSigma.mul(spatialSigma).mul(-2.0)));
-    const tap = bnrTap(tex, ctx, centerGuide, sx * 2, sy * 2, spatialW);
-    sum = sum.add(tap.sum);
-    wsum = wsum.add(tap.w);
+    const tap = tapPx(tex, screenUV, ctx.texel, sx * 2, sy * 2);
+    const diff = tap.g.sub(centerGuide);
+    const rangeW = exp(diff.mul(diff).div(rangeSigma.mul(rangeSigma).mul(-2.0)));
+    const w = rangeW.mul(spatialW);
+    sum = sum.add(tap.r.mul(w));
+    wsum = wsum.add(w);
   }
 
   const filtered = sum.div(max(wsum, float(1e-5)));
@@ -710,6 +738,7 @@ function jpegInput(tex, ctx, p) {
   return vec3(c.x.sub(128.0), chroma.x, chroma.y);
 }
 
+
 function sampleDct(tex, ctx, p) {
   const samplePos = min(p.add(0.5), ctx.resolution.sub(0.5));
   return texture(tex, samplePos.div(ctx.resolution)).rgb;
@@ -749,19 +778,27 @@ const JPEG_CHROMA_Q = [
   [99, 99, 99, 99, 99, 99, 99, 99],
 ];
 
-function axisMask(value, index) {
-  return float(1.0).sub(step(0.5, abs(value.sub(index))));
-}
-
-function jpegTableAt(table, u, v) {
-  let q = float(0.0);
-  for (let y = 0; y < 8; y += 1) {
-    const my = axisMask(v, y);
-    for (let x = 0; x < 8; x += 1) {
-      q = q.add(axisMask(u, x).mul(my).mul(table[y][x]));
+// 8x8 quantization tables as a LUT texture (r = luma Q, g = chroma Q). The
+// previous in-shader table lookup expanded to a 64-term masked sum per pixel
+// per table; a nearest-filtered fetch returns the identical value for free.
+let jpegQTexture = null;
+function getJpegQTexture() {
+  if (!jpegQTexture) {
+    const data = new Float32Array(64 * 4);
+    for (let y = 0; y < 8; y += 1) {
+      for (let x = 0; x < 8; x += 1) {
+        const i = (y * 8 + x) * 4;
+        data[i] = JPEG_LUMA_Q[y][x];
+        data[i + 1] = JPEG_CHROMA_Q[y][x];
+        data[i + 3] = 1;
+      }
     }
+    jpegQTexture = new THREE.DataTexture(data, 8, 8, THREE.RGBAFormat, THREE.FloatType);
+    jpegQTexture.minFilter = THREE.NearestFilter;
+    jpegQTexture.magFilter = THREE.NearestFilter;
+    jpegQTexture.needsUpdate = true;
   }
-  return q;
+  return jpegQTexture;
 }
 
 function jpegQuantStep(ctx, u, v) {
@@ -771,8 +808,9 @@ function jpegQuantStep(ctx, u, v) {
   const qualityScale = mix(lowScale, highScale, step(50.0, quality));
   const strength = max(ctx.P.jpegStrength, float(0.01));
   const scale = qualityScale.mul(0.01).mul(strength);
-  const yQ = jpegTableAt(JPEG_LUMA_Q, u, v).mul(scale).clamp(1.0, 255.0);
-  const cQ = jpegTableAt(JPEG_CHROMA_Q, u, v).mul(scale).clamp(1.0, 255.0);
+  const q = texture(getJpegQTexture(), vec2(u.add(0.5).div(8.0), v.add(0.5).div(8.0)));
+  const yQ = q.r.mul(scale).clamp(1.0, 255.0);
+  const cQ = q.g.mul(scale).clamp(1.0, 255.0);
   return vec3(yQ, cQ, cQ);
 }
 
@@ -803,17 +841,28 @@ function stJpegDctColsQuant(tex, ctx) {
   return quantize(coeff, q);
 }
 
-function stJpegIdct(tex, ctx, originalTex) {
+// Inverse DCT, separable like the forward transform: columns then rows,
+// 8+8 taps instead of the 64-tap full-block form. Mathematically identical.
+function stJpegIdctCols(tex, ctx) {
   const p = floor(screenUV.mul(ctx.resolution));
   const block = floor(p.div(8.0)).mul(8.0);
   const local = mod(p, 8.0);
   let sum = vec3(0.0);
   for (let v = 0; v < 8; v += 1) {
     const by = dctBasis(local.y, float(v)).mul(dctNorm1D(float(v)));
-    for (let u = 0; u < 8; u += 1) {
-      const bx = dctBasis(local.x, float(u)).mul(dctNorm1D(float(u)));
-      sum = sum.add(sampleDct(tex, ctx, block.add(vec2(u, v))).mul(bx.mul(by)));
-    }
+    sum = sum.add(sampleDct(tex, ctx, block.add(vec2(local.x, v))).mul(by));
+  }
+  return sum;
+}
+
+function stJpegIdctRows(tex, ctx, originalTex) {
+  const p = floor(screenUV.mul(ctx.resolution));
+  const block = floor(p.div(8.0)).mul(8.0);
+  const local = mod(p, 8.0);
+  let sum = vec3(0.0);
+  for (let u = 0; u < 8; u += 1) {
+    const bx = dctBasis(local.x, float(u)).mul(dctNorm1D(float(u)));
+    sum = sum.add(sampleDct(tex, ctx, block.add(vec2(u, local.y))).mul(bx));
   }
   const original = samplePixel(originalTex, ctx, p);
   const decoded = yCbCrToRgb(sum.add(vec3(128.0, 0.0, 0.0))).clamp(0.0, LEVELS);
@@ -844,13 +893,13 @@ export const STAGE_DEFS = [
   { id: "barrel", label: "Barrel distortion", make: stBarrel },
   { id: "ca", label: "Chromatic aberration", make: stChromatic },
   { id: "lens", label: "Lens PSF softness", make: stLensPsf },
-  { id: "ccdbloom", label: "CCD bloom / vertical smear", make: stCcdBloom },
+  { id: "ccdbloom", label: "CCD bloom / vertical smear" }, // multi-pass, built by id in _rebuild
   { id: "mosaic", label: "Bayer mosaic", make: stMosaic },
   { id: "dpc", label: "Dead pixel correction", make: stDeadPixelCorrection },
   { id: "blacklevel", label: "Black level offset", make: stBlackLevel },
   { id: "noise", label: "CCD sensor noise", make: stBayerNoise },
   { id: "aaf", label: "Anti-alias filter (OLPF)", make: stAAF },
-  { id: "bnr", label: "Bayer noise reduction", make: stBayerDenoise },
+  { id: "bnr", label: "Bayer noise reduction" }, // multi-pass, built by id in _rebuild
   { id: "wb", label: "White balance (Bayer)", make: stWhiteBalance },
   { id: "demosaic", label: "Demosaic", make: stDemosaic },
   { id: "chromanr", label: "Chroma noise reduction", make: stChromaDenoise },
@@ -859,7 +908,7 @@ export const STAGE_DEFS = [
   { id: "saturation", label: "Saturation boost", make: stSaturation },
   { id: "vignette", label: "Vignette", make: stVignette },
   { id: "edge", label: "Edge enhancement", make: stEdgeEnhance },
-  { id: "jpeg", label: "JPEG DCT compression", multi: [stJpegDctRows, stJpegDctColsQuant, stJpegIdct] },
+  { id: "jpeg", label: "JPEG DCT compression" }, // multi-pass, built by id in _rebuild
 ];
 
 export const ANALOG_STAGE_DEFS = [
@@ -879,6 +928,7 @@ export function makeUniforms() {
   return {
     resolution: uniform(new THREE.Vector2(1, 1)),
     texel: uniform(new THREE.Vector2(1, 1)),
+    bloomTexel: uniform(new THREE.Vector2(1, 1)),
     frame: uniform(0),
     power: uniform(1),
     // global noise trim: raw Bayer noise is injected, then reduced in later stages
@@ -994,6 +1044,23 @@ export class Pipeline {
     this.rtA = new THREE.RenderTarget(1, 1, opts);
     this.rtB = new THREE.RenderTarget(1, 1, { ...opts });
     this.rtC = new THREE.RenderTarget(1, 1, { ...opts });
+    // quarter-height pair for the CCD bloom smear (full width)
+    this.rtBloomA = new THREE.RenderTarget(1, 1, { ...opts });
+    this.rtBloomB = new THREE.RenderTarget(1, 1, { ...opts });
+    // fp32 scratch targets for split-pass intermediates (BNR guide, JPEG
+    // IDCT columns). These values previously lived in registers inside one
+    // big pass; storing them at half precision would add rounding the
+    // original never had, so fp32 keeps the split passes numerically
+    // faithful. Nearest filtering because every consumer samples exact texel
+    // centers — and it avoids needing float32-filterable.
+    const preciseOpts = {
+      ...opts,
+      type: THREE.FloatType,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+    };
+    this.rtD = new THREE.RenderTarget(1, 1, preciseOpts);
+    this.rtE = new THREE.RenderTarget(1, 1, { ...preciseOpts });
 
     // fullscreen quad — its material is swapped to the current step's material
     this.quadScene = new THREE.Scene();
@@ -1031,9 +1098,15 @@ export class Pipeline {
     this.rtA.setSize(w, h);
     this.rtB.setSize(w, h);
     this.rtC.setSize(w, h);
+    this.rtD.setSize(w, h);
+    this.rtE.setSize(w, h);
+    const bh = Math.max(1, Math.round(h / 4));
+    this.rtBloomA.setSize(w, bh);
+    this.rtBloomB.setSize(w, bh);
     this.size = { w, h };
     this.ctx.resolution.value.set(w, h);
     this.ctx.texel.value.set(1 / w, 1 / h);
+    this.ctx.bloomTexel.value.set(1 / w, 1 / bh);
     this.dirty = true;
   }
 
@@ -1111,16 +1184,41 @@ export class Pipeline {
           continue;
         }
       }
-      const makers = stage.multi || [stage.make];
-      let originalTex = read.texture;
-      if (stage.multi) {
-        this.steps.push({ material: this._mat(stCopy(read.texture, this.ctx)), target: this.rtC });
-        originalTex = this.rtC.texture;
-      }
-      for (const make of makers) {
-        this.steps.push({ material: this._mat(make(read.texture, this.ctx, originalTex)), target: write });
+      if (stage.id === "ccdbloom") {
+        // extract (quarter height) -> smear (quarter height) -> composite (full)
+        this.steps.push({ material: this._mat(stCcdBloomExtract(read.texture, this.ctx)), target: this.rtBloomA });
+        this.steps.push({ material: this._mat(stCcdBloomSmear(this.rtBloomA.texture, this.ctx)), target: this.rtBloomB });
+        this.steps.push({
+          material: this._mat(stCcdBloomComposite(read.texture, this.ctx, this.rtBloomB.texture)),
+          target: write,
+        });
         const tmp = read; read = write; write = tmp;
+        continue;
       }
+      if (stage.id === "bnr") {
+        // guide prepass (fp32) -> joint bilateral reading value+guide per tap
+        this.steps.push({ material: this._mat(stBnrGuide(read.texture, this.ctx)), target: this.rtD });
+        this.steps.push({ material: this._mat(stBayerDenoise(this.rtD.texture, this.ctx)), target: write });
+        const tmp = read; read = write; write = tmp;
+        continue;
+      }
+      if (stage.id === "jpeg") {
+        // original copy -> row DCT -> col DCT + quant -> col IDCT (fp32)
+        // -> row IDCT + composite
+        this.steps.push({ material: this._mat(stCopy(read.texture, this.ctx)), target: this.rtC });
+        this.steps.push({ material: this._mat(stJpegDctRows(read.texture, this.ctx)), target: write });
+        let tmp = read; read = write; write = tmp;
+        this.steps.push({ material: this._mat(stJpegDctColsQuant(read.texture, this.ctx)), target: write });
+        tmp = read; read = write; write = tmp;
+        this.steps.push({ material: this._mat(stJpegIdctCols(read.texture, this.ctx)), target: this.rtE });
+        this.steps.push({
+          material: this._mat(stJpegIdctRows(this.rtE.texture, this.ctx, this.rtC.texture)),
+          target: write,
+        });
+        tmp = read; read = write; write = tmp;
+        continue;
+      }
+      appendSingle(stage.make);
     }
 
     const finalTex = this.steps[this.steps.length - 1].target.texture;
@@ -1171,6 +1269,10 @@ export class Pipeline {
     this.rtA.dispose();
     this.rtB.dispose();
     this.rtC.dispose();
+    this.rtD.dispose();
+    this.rtE.dispose();
+    this.rtBloomA.dispose();
+    this.rtBloomB.dispose();
     this.mesh.geometry.dispose();
   }
 }
