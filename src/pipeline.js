@@ -920,6 +920,12 @@ const DIGITAL_POINT_STAGE_IDS = new Set([
   "ccm", "tone", "saturation", "vignette",
 ]);
 
+// Bayer-domain stages: output is replicated grey and every in-section
+// consumer samples .r only, so these can live in single-channel targets.
+const GREY_STAGE_IDS = new Set([
+  "mosaic", "dpc", "blacklevel", "noise", "aaf", "bnr", "wb",
+]);
+
 // ---------------------------------------------------------------------------
 // uniforms built per preset (so we can hot-swap without rebuilding nodes)
 // ---------------------------------------------------------------------------
@@ -1061,6 +1067,11 @@ export class Pipeline {
     };
     this.rtD = new THREE.RenderTarget(1, 1, preciseOpts);
     this.rtE = new THREE.RenderTarget(1, 1, { ...preciseOpts });
+    // single-channel (r16float) pair for the Bayer-domain section — same .r
+    // bits as the RGBA pair at a quarter of the bandwidth.
+    const greyOpts = { ...opts, format: THREE.RedFormat };
+    this.rtGreyA = new THREE.RenderTarget(1, 1, greyOpts);
+    this.rtGreyB = new THREE.RenderTarget(1, 1, { ...greyOpts });
 
     // fullscreen quad — its material is swapped to the current step's material
     this.quadScene = new THREE.Scene();
@@ -1100,6 +1111,8 @@ export class Pipeline {
     this.rtC.setSize(w, h);
     this.rtD.setSize(w, h);
     this.rtE.setSize(w, h);
+    this.rtGreyA.setSize(w, h);
+    this.rtGreyB.setSize(w, h);
     const bh = Math.max(1, Math.round(h / 4));
     this.rtBloomA.setSize(w, bh);
     this.rtBloomB.setSize(w, bh);
@@ -1141,9 +1154,34 @@ export class Pipeline {
     const active = this.mode === "analog"
       ? ANALOG_STAGE_DEFS
       : STAGE_DEFS.filter((s) => this.enabled.has(s.id));
-    let read = this.rtA;
-    let write = this.rtB;
     let startIndex = 0;
+
+    // Bayer-domain stages write replicated grey and their in-section
+    // consumers read .r only, so they can ping-pong through the
+    // single-channel targets — same bits, a quarter of the bandwidth. Only
+    // allowed when the enabled run of them feeds straight into demosaic;
+    // any other consumer (chroma NR, CCM stack, edge, JPEG, the output
+    // blit) reads .gb too, so those combos stay on the RGBA targets.
+    let greyEligible = false;
+    if (this.mode === "digital") {
+      const first = active.findIndex((s) => GREY_STAGE_IDS.has(s.id));
+      if (first >= 0) {
+        let last = first;
+        while (last + 1 < active.length && GREY_STAGE_IDS.has(active[last + 1].id)) last += 1;
+        greyEligible = active[last + 1]?.id === "demosaic";
+      }
+    }
+
+    let read = this.rtA;
+    const targetFor = (domain) => (domain === "grey"
+      ? (read === this.rtGreyA ? this.rtGreyB : this.rtGreyA)
+      : (read === this.rtA ? this.rtB : this.rtA));
+    const push = (material, domain = "rgb") => {
+      const target = targetFor(domain);
+      this.steps.push({ material, target });
+      read = target;
+    };
+    const stackDomain = (ids) => (greyEligible && ids.every((id) => GREY_STAGE_IDS.has(id)) ? "grey" : "rgb");
 
     // Mandatory input/downsample is point-only, so fold it into the first
     // digital point-stage run when no earlier resampling stage is active.
@@ -1153,21 +1191,17 @@ export class Pipeline {
         ids.push(active[startIndex].id);
         startIndex += 1;
       }
+      read = stackDomain(ids) === "grey" ? this.rtGreyA : this.rtA;
       this.steps.push({
         material: this._mat(stInputDigitalPointStack(this.source, this.ctx, new Set(ids))),
-        target: this.rtA,
+        target: read,
       });
     } else {
       // mandatory input + downsample pass: 0..1 source -> 0..255 in rtA.
       this.steps.push({ material: this._mat(stInput(this.source, this.ctx)), target: this.rtA });
     }
 
-    const appendSingle = (make) => {
-      this.steps.push({ material: this._mat(make(read.texture, this.ctx)), target: write });
-      const tmp = read; read = write; write = tmp;
-    };
-
-    // ping-pong the active stages across rtA/rtB with baked input textures
+    // ping-pong the active stages with baked input textures
     for (let i = startIndex; i < active.length; i += 1) {
       const stage = active[i];
       if (DIGITAL_POINT_STAGE_IDS.has(stage.id)) {
@@ -1179,7 +1213,7 @@ export class Pipeline {
         }
         if (ids.length > 1) {
           const idSet = new Set(ids);
-          appendSingle((tex, ctx) => stDigitalPointStack(tex, ctx, idSet));
+          push(this._mat(stDigitalPointStack(read.texture, this.ctx, idSet)), stackDomain(ids));
           i = j - 1;
           continue;
         }
@@ -1188,37 +1222,27 @@ export class Pipeline {
         // extract (quarter height) -> smear (quarter height) -> composite (full)
         this.steps.push({ material: this._mat(stCcdBloomExtract(read.texture, this.ctx)), target: this.rtBloomA });
         this.steps.push({ material: this._mat(stCcdBloomSmear(this.rtBloomA.texture, this.ctx)), target: this.rtBloomB });
-        this.steps.push({
-          material: this._mat(stCcdBloomComposite(read.texture, this.ctx, this.rtBloomB.texture)),
-          target: write,
-        });
-        const tmp = read; read = write; write = tmp;
+        push(this._mat(stCcdBloomComposite(read.texture, this.ctx, this.rtBloomB.texture)));
         continue;
       }
       if (stage.id === "bnr") {
         // guide prepass (fp32) -> joint bilateral reading value+guide per tap
         this.steps.push({ material: this._mat(stBnrGuide(read.texture, this.ctx)), target: this.rtD });
-        this.steps.push({ material: this._mat(stBayerDenoise(this.rtD.texture, this.ctx)), target: write });
-        const tmp = read; read = write; write = tmp;
+        push(this._mat(stBayerDenoise(this.rtD.texture, this.ctx)), greyEligible ? "grey" : "rgb");
         continue;
       }
       if (stage.id === "jpeg") {
         // original copy -> row DCT -> col DCT + quant -> col IDCT (fp32)
         // -> row IDCT + composite
         this.steps.push({ material: this._mat(stCopy(read.texture, this.ctx)), target: this.rtC });
-        this.steps.push({ material: this._mat(stJpegDctRows(read.texture, this.ctx)), target: write });
-        let tmp = read; read = write; write = tmp;
-        this.steps.push({ material: this._mat(stJpegDctColsQuant(read.texture, this.ctx)), target: write });
-        tmp = read; read = write; write = tmp;
+        push(this._mat(stJpegDctRows(read.texture, this.ctx)));
+        push(this._mat(stJpegDctColsQuant(read.texture, this.ctx)));
         this.steps.push({ material: this._mat(stJpegIdctCols(read.texture, this.ctx)), target: this.rtE });
-        this.steps.push({
-          material: this._mat(stJpegIdctRows(this.rtE.texture, this.ctx, this.rtC.texture)),
-          target: write,
-        });
-        tmp = read; read = write; write = tmp;
+        push(this._mat(stJpegIdctRows(this.rtE.texture, this.ctx, this.rtC.texture)));
         continue;
       }
-      appendSingle(stage.make);
+      const domain = greyEligible && GREY_STAGE_IDS.has(stage.id) ? "grey" : "rgb";
+      push(this._mat(stage.make(read.texture, this.ctx)), domain);
     }
 
     const finalTex = this.steps[this.steps.length - 1].target.texture;
@@ -1271,6 +1295,8 @@ export class Pipeline {
     this.rtC.dispose();
     this.rtD.dispose();
     this.rtE.dispose();
+    this.rtGreyA.dispose();
+    this.rtGreyB.dispose();
     this.rtBloomA.dispose();
     this.rtBloomB.dispose();
     this.mesh.geometry.dispose();
