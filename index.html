@@ -145,8 +145,25 @@
 
     <button id="freeze-noise" class="active">unfreeze noise</button>
 
-    <div id="drop">drop an image here<br>(or click to choose)</div>
-    <input id="file" type="file" accept="image/*" hidden>
+    <button id="record">record video</button>
+
+    <div id="video-controls" hidden>
+      <div class="button-row">
+        <button id="playpause">play</button>
+        <button id="mute">mute</button>
+      </div>
+      <div>
+        <label for="seek">Scrub · <span id="timeval">0:00 / 0:00</span></label>
+        <input id="seek" type="range" min="0" max="1000" step="1" value="0">
+      </div>
+      <div>
+        <label for="volume">Volume · <span id="volval">100</span></label>
+        <input id="volume" type="range" min="0" max="100" value="100">
+      </div>
+    </div>
+
+    <div id="drop">drop an image or video here<br>(or click to choose)</div>
+    <input id="file" type="file" accept="image/*,video/*" hidden>
 
     <div id="stage-controls">
       <label>Pipeline stages</label>

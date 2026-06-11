@@ -59,6 +59,14 @@ const els = {
   headswitch: document.getElementById("headswitch"),
   headswitchval: document.getElementById("headswitchval"),
   freeze: document.getElementById("freeze-noise"),
+  record: document.getElementById("record"),
+  videoControls: document.getElementById("video-controls"),
+  playpause: document.getElementById("playpause"),
+  mute: document.getElementById("mute"),
+  seek: document.getElementById("seek"),
+  timeval: document.getElementById("timeval"),
+  volume: document.getElementById("volume"),
+  volval: document.getElementById("volval"),
   stages: document.getElementById("stages"),
   stageControls: document.getElementById("stage-controls"),
   drop: document.getElementById("drop"),
@@ -69,6 +77,14 @@ const els = {
 };
 
 let renderer, pipeline, source = null;
+let currentVideo = null;
+let videoFrameDirty = false;
+let scrubbing = false;
+let userMuted = false;
+let userVolume = 1;
+let recorder = null;
+let recChunks = [];
+let recLoopWas = false;
 let frame = 0;
 let mode = "analog";
 let presetKey = "cybershot";
@@ -281,6 +297,42 @@ function wireInput() {
     syncFreezeUI();
   });
 
+  els.record.addEventListener("click", () => {
+    if (recorder) stopRecording();
+    else startRecording();
+  });
+
+  els.playpause.addEventListener("click", () => {
+    if (!currentVideo) return;
+    if (currentVideo.paused) currentVideo.play().catch(() => {});
+    else currentVideo.pause();
+  });
+  els.mute.addEventListener("click", () => {
+    if (!currentVideo) return;
+    userMuted = !currentVideo.muted;
+    currentVideo.muted = userMuted;
+    syncTransportUI();
+  });
+  els.volume.addEventListener("input", () => {
+    userVolume = els.volume.value / 100;
+    els.volval.textContent = String(Math.round(els.volume.value));
+    if (currentVideo) {
+      currentVideo.volume = userVolume;
+      if (userVolume > 0 && currentVideo.muted) {
+        currentVideo.muted = userMuted = false;
+        syncTransportUI();
+      }
+    }
+  });
+  els.seek.addEventListener("pointerdown", () => { scrubbing = true; });
+  els.seek.addEventListener("pointerup", () => { scrubbing = false; });
+  els.seek.addEventListener("input", () => {
+    if (!currentVideo || !isFinite(currentVideo.duration) || currentVideo.duration <= 0) return;
+    currentVideo.currentTime = (els.seek.value / 1000) * currentVideo.duration;
+    videoFrameDirty = true; // show the seeked frame even while paused
+    els.timeval.textContent = `${fmtTime(currentVideo.currentTime)} / ${fmtTime(currentVideo.duration)}`;
+  });
+
   els.enableStages.addEventListener("click", () => {
     for (const stage of STAGE_DEFS) pipeline.setEnabled(stage.id, true);
     buildStageUI();
@@ -395,8 +447,84 @@ function syncEffectUI() {
 }
 
 async function loadFile(file) {
+  if (file.type.startsWith("video/")) return loadVideo(file);
   const bitmap = await createImageBitmap(file);
   setSource(bitmap, file.name);
+}
+
+function loadVideo(file) {
+  stopVideo();
+  const video = document.createElement("video");
+  video.src = URL.createObjectURL(file);
+  video.loop = true;
+  video.muted = userMuted;     // starts audible by default — playback is user-initiated
+  video.volume = userVolume;
+  video.playsInline = true;
+  video.preload = "auto";
+  video.addEventListener("error", () => setStatus(`could not load ${file.name}`));
+  video.addEventListener("play", syncTransportUI);
+  video.addEventListener("pause", syncTransportUI);
+  // loadeddata → first frame is decoded, so we can show it paused (no autoplay)
+  video.addEventListener("loadeddata", () => setVideoSource(video, file.name), { once: true });
+}
+
+function setVideoSource(video, label) {
+  if (source) source.dispose();
+  currentVideo = video;
+  // Plain Texture (not VideoTexture) so the frame goes through the exact same
+  // NoColorSpace upload path images use — keeps the filtered look identical.
+  const tex = new THREE.Texture(video);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.flipY = false;
+  tex.minFilter = THREE.LinearFilter; // no per-frame mipmap regen for video
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  tex.needsUpdate = true;
+  tex.userData.w = video.videoWidth;
+  tex.userData.h = video.videoHeight;
+  tex.userData.label = label;
+  tex.userData.isVideo = true;
+  source = tex;
+  videoFrameDirty = true;       // push the first (paused) frame through once
+  pipeline.setSource(source);
+  resizeForSource();
+  els.videoControls.hidden = false;
+  els.volume.value = Math.round(userVolume * 100);
+  els.volval.textContent = String(Math.round(userVolume * 100));
+  syncTransportUI();
+  setStatus(`${label}\nloaded · press play`);
+}
+
+function stopVideo() {
+  if (!currentVideo) return;
+  currentVideo.pause();
+  URL.revokeObjectURL(currentVideo.src);
+  currentVideo = null;
+  els.videoControls.hidden = true;
+}
+
+function fmtTime(s) {
+  if (!isFinite(s) || s < 0) s = 0;
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+function syncTransportUI() {
+  if (!currentVideo) return;
+  const paused = currentVideo.paused;
+  els.playpause.textContent = paused ? "play" : "pause";
+  els.playpause.classList.toggle("active", !paused);
+  els.mute.textContent = currentVideo.muted ? "unmute" : "mute";
+  els.mute.classList.toggle("active", currentVideo.muted);
+}
+
+function updateTransportProgress() {
+  if (!currentVideo || scrubbing) return;
+  const d = currentVideo.duration || 0;
+  const t = currentVideo.currentTime || 0;
+  if (d) els.seek.value = Math.round((t / d) * 1000);
+  els.timeval.textContent = `${fmtTime(t)} / ${fmtTime(d)}`;
 }
 
 async function loadImage(url) {
@@ -410,6 +538,7 @@ async function loadImage(url) {
 }
 
 function setSource(bitmap, label) {
+  stopVideo();
   if (source) source.dispose();
   source = new THREE.Texture(bitmap);
   source.colorSpace = THREE.NoColorSpace;
@@ -444,10 +573,91 @@ function resizeForSource() {
   pipeline.setSize(w, h);
 }
 
+function pickRecMime(withAudio) {
+  const a = withAudio ? ",opus" : "";
+  const types = [`video/webm;codecs=vp9${a}`, `video/webm;codecs=vp8${a}`, "video/webm"];
+  return types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+}
+
+function startRecording() {
+  if (!source) return;
+  if (!els.canvas.captureStream) {
+    setStatus("recording not supported in this browser");
+    return;
+  }
+  // captures the filtered canvas (processing resolution) in realtime
+  const stream = els.canvas.captureStream(30);
+  // mux in the source video's audio track (silent if muted / no audio)
+  try {
+    const atrack = currentVideo?.captureStream?.().getAudioTracks?.()[0];
+    if (atrack) stream.addTrack(atrack);
+  } catch { /* element captureStream unsupported — record video only */ }
+  const mimeType = pickRecMime(stream.getAudioTracks().length > 0);
+  if (!mimeType) {
+    setStatus("recording not supported in this browser");
+    return;
+  }
+  recChunks = [];
+  recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 12_000_000 });
+  recorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
+  recorder.onstop = () => {
+    const blob = new Blob(recChunks, { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const base = (source?.userData.label || "powershot").replace(/\.[^.]+$/, "");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${base}-powershot.webm`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    recChunks = [];
+  };
+  recorder.start();
+
+  if (currentVideo) {
+    // record = capture the whole clip: rewind, play through once, auto-stop at the end
+    recLoopWas = currentVideo.loop;
+    currentVideo.loop = false;
+    currentVideo.currentTime = 0;
+    videoFrameDirty = true;
+    currentVideo.addEventListener("ended", stopRecording, { once: true });
+    currentVideo.play().catch(() => {});
+    setStatus(`recording ${fmtTime(currentVideo.duration)}…`);
+  } else {
+    setStatus("recording… (click again to stop)");
+  }
+  syncRecordUI();
+}
+
+function stopRecording() {
+  if (currentVideo) {
+    currentVideo.removeEventListener("ended", stopRecording);
+    currentVideo.pause();
+    currentVideo.loop = recLoopWas;
+  }
+  if (recorder && recorder.state !== "inactive") recorder.stop();
+  recorder = null;
+  syncRecordUI();
+}
+
+function syncRecordUI() {
+  const on = !!recorder;
+  els.record.textContent = on ? "stop recording" : "record video";
+  els.record.classList.toggle("active", on);
+}
+
 async function tick() {
   if (!source || busy) return;
   busy = true;
   if (!freezeNoise) frame += 1;
+
+  // re-upload the current video frame while it plays (or once after a seek)
+  if (source.userData.isVideo && currentVideo && currentVideo.readyState >= 2) {
+    if (!currentVideo.paused || videoFrameDirty) {
+      source.needsUpdate = true;
+      videoFrameDirty = false;
+    }
+    updateTransportProgress();
+  }
 
   try {
     await pipeline.render(frame);
@@ -470,7 +680,10 @@ async function tick() {
     const frozen = freezeNoise ? " · frozen" : "";
     const modeLabel = mode === "analog" ? "Analog" : PRESETS[presetKey].name;
     const stageLabel = mode === "analog" ? "analog mode" : `${pipeline.enabled.size}/${STAGE_DEFS.length} stages`;
-    setStatus(`${modeLabel}\n${r.x}×${r.y} · ${fps} fps · ${stageLabel}${frozen}`);
+    const rec = recorder
+      ? (currentVideo ? ` · ● REC ${fmtTime(currentVideo.currentTime)}/${fmtTime(currentVideo.duration)}` : " · ● REC")
+      : "";
+    setStatus(`${modeLabel}\n${r.x}×${r.y} · ${fps} fps · ${stageLabel}${frozen}${rec}`);
   }
 }
 

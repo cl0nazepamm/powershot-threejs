@@ -139,6 +139,17 @@ label {
   display: none;
 }
 
+#video-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+#video-controls[hidden] {
+  display: none;
+}
+
 #panel > div,
 #digital-controls > div,
 #analog-controls > div,
