@@ -16,6 +16,7 @@
       <select id="mode">
         <option value="analog">Analog</option>
         <option value="digital">Digital</option>
+        <option value="film">Film</option>
       </select>
     </div>
 
@@ -141,6 +142,75 @@
         <label for="headswitch">Head switch · <span id="headswitchval">0.12</span></label>
         <input id="headswitch" type="range" min="0" max="300" value="12">
       </div>
+    </div>
+
+    <div id="film-controls" hidden>
+      <div>
+        <label for="filmpreset">Film stock</label>
+        <select id="filmpreset"></select>
+      </div>
+
+      <div>
+        <label for="filmexposure">Exposure (stops) · <span id="filmexposureval">0.00</span></label>
+        <input id="filmexposure" type="range" min="-300" max="300" value="0">
+      </div>
+
+      <div>
+        <label for="filmgamma">Input gamma · <span id="filmgammaval">0.65</span></label>
+        <input id="filmgamma" type="range" min="50" max="150" value="65">
+      </div>
+
+      <div>
+        <label for="filmgrain">Grain · <span id="filmgrainval">1.00</span></label>
+        <input id="filmgrain" type="range" min="0" max="300" value="100">
+      </div>
+
+      <div>
+        <label for="filmgrainsize">Grain size · <span id="filmgrainsizeval">1.60</span></label>
+        <input id="filmgrainsize" type="range" min="50" max="400" value="160">
+      </div>
+
+      <div>
+        <label for="filmgrainsat">Grain colour · <span id="filmgrainsatval">0.80</span></label>
+        <input id="filmgrainsat" type="range" min="0" max="100" value="80">
+      </div>
+
+      <div>
+        <label for="filmhalation">Halation · <span id="filmhalationval">0.35</span></label>
+        <input id="filmhalation" type="range" min="0" max="100" value="35">
+      </div>
+
+      <div>
+        <label for="filmhalthreshold">Halation threshold · <span id="filmhalthresholdval">0.55</span></label>
+        <input id="filmhalthreshold" type="range" min="0" max="100" value="55">
+      </div>
+
+      <div>
+        <label for="filmhalradius">Halation radius · <span id="filmhalradiusval">1.50</span></label>
+        <input id="filmhalradius" type="range" min="50" max="300" value="150">
+      </div>
+
+      <div>
+        <label for="filmprintexp">Print exposure · <span id="filmprintexpval">0.00</span></label>
+        <input id="filmprintexp" type="range" min="-100" max="100" value="0">
+      </div>
+
+      <div>
+        <label for="filmwarmth">Print warmth · <span id="filmwarmthval">0.00</span></label>
+        <input id="filmwarmth" type="range" min="-100" max="100" value="0">
+      </div>
+
+      <div>
+        <label for="filmweave">Gate weave · <span id="filmweaveval">0.40</span></label>
+        <input id="filmweave" type="range" min="0" max="200" value="40">
+      </div>
+
+      <div>
+        <label for="filmflicker">Flicker · <span id="filmflickerval">0.12</span></label>
+        <input id="filmflicker" type="range" min="0" max="100" value="12">
+      </div>
+
+      <button id="filmnegview">show negative</button>
     </div>
 
     <button id="freeze-noise" class="active">unfreeze noise</button>

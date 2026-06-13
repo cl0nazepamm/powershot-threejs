@@ -4,7 +4,7 @@
   <img src="public/logo.png" alt="powershot" width="400">
 </p>
 
-Authentic digital and analog post-processing filters for Three.js.
+Authentic digicam, analog tape and film emulation post-processing filters for Three.js.
 
 ## Play live here.
 
@@ -49,6 +49,29 @@ powershot.renderTexture(inputTexture, frame);
 
 To keep the same on-screen scale while processing at a lower authentic analog resolution, keep your canvas CSS size fixed and pass the lower internal size to `setSize()`.
 
+For motion-picture film emulation, use `FilmPipeline` instead. It models a negative-to-print chain with film stocks, grain, halation, gate weave, flicker, print warmth, and negative inspection.
+
+```js
+import * as THREE from "three/webgpu";
+import { FilmPipeline, FILM_PRESETS, applyFilmPreset } from "powershot-threejs";
+
+const renderer = new THREE.WebGPURenderer({ canvas });
+await renderer.init();
+
+const film = new FilmPipeline(renderer);
+film.setSize(width, height);
+applyFilmPreset(film.ctx, FILM_PRESETS.kodak_500t);
+
+// Optional controls.
+film.ctx.power.value = 1.0; // blends between source and film render
+film.ctx.P.exposure.value = 0.0; // stops at the film plane
+film.ctx.P.grainStrength.value = 1.0;
+film.ctx.P.halStrength.value = 0.35;
+film.ctx.P.negativeView.value = 0; // set to 1 to inspect the negative
+
+film.renderTexture(inputTexture, frame);
+```
+
 For a normal Three.js scene, render your scene into a `THREE.RenderTarget`, then pass `target.texture` to `renderTexture()`:
 
 ```js
@@ -73,6 +96,7 @@ Useful controls:
 - `src/index.js` - public package exports.
 - `src/main.js` - demo bootstrap, controls, image loading, and render loop.
 - `src/pipeline.js` - reusable realtime ISP stages and WebGPU render passes.
+- `src/film.js` - reusable motion-picture film emulation pipeline and stock presets.
 - `src/presets.js` - camera preset values.
 - `src/styles.css` - app UI styles.
 - `public/logo.png` - PowerSHOT logo.

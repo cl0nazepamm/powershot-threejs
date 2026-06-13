@@ -10,3 +10,12 @@ export {
   PRESET_KEYS,
   PRESETS,
 } from "./presets.js";
+
+export {
+  FILM_PRESET_KEYS,
+  FILM_PRESETS,
+  FILM_STAGE_DEFS,
+  FilmPipeline,
+  applyFilmPreset,
+  makeFilmUniforms,
+} from "./film.js";

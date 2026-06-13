@@ -1,6 +1,9 @@
 // PowerSHOT realtime ISP — bootstrap (three.js WebGPU).
 import * as THREE from "three/webgpu";
-import { Pipeline, PRESETS, PRESET_KEYS, STAGE_DEFS, applyPreset } from "./index.js";
+import {
+  Pipeline, PRESETS, PRESET_KEYS, STAGE_DEFS, applyPreset,
+  FilmPipeline, FILM_PRESETS, FILM_PRESET_KEYS, applyFilmPreset,
+} from "./index.js";
 
 const MAX_WORK = 1600; // cap working resolution for snappy realtime
 const ANALOG_WORK = [720, 540];
@@ -14,6 +17,33 @@ const els = {
   preset: document.getElementById("preset"),
   digitalControls: document.getElementById("digital-controls"),
   analogControls: document.getElementById("analog-controls"),
+  filmControls: document.getElementById("film-controls"),
+  filmpreset: document.getElementById("filmpreset"),
+  filmexposure: document.getElementById("filmexposure"),
+  filmexposureval: document.getElementById("filmexposureval"),
+  filmgamma: document.getElementById("filmgamma"),
+  filmgammaval: document.getElementById("filmgammaval"),
+  filmgrain: document.getElementById("filmgrain"),
+  filmgrainval: document.getElementById("filmgrainval"),
+  filmgrainsize: document.getElementById("filmgrainsize"),
+  filmgrainsizeval: document.getElementById("filmgrainsizeval"),
+  filmgrainsat: document.getElementById("filmgrainsat"),
+  filmgrainsatval: document.getElementById("filmgrainsatval"),
+  filmhalation: document.getElementById("filmhalation"),
+  filmhalationval: document.getElementById("filmhalationval"),
+  filmhalthreshold: document.getElementById("filmhalthreshold"),
+  filmhalthresholdval: document.getElementById("filmhalthresholdval"),
+  filmhalradius: document.getElementById("filmhalradius"),
+  filmhalradiusval: document.getElementById("filmhalradiusval"),
+  filmprintexp: document.getElementById("filmprintexp"),
+  filmprintexpval: document.getElementById("filmprintexpval"),
+  filmwarmth: document.getElementById("filmwarmth"),
+  filmwarmthval: document.getElementById("filmwarmthval"),
+  filmweave: document.getElementById("filmweave"),
+  filmweaveval: document.getElementById("filmweaveval"),
+  filmflicker: document.getElementById("filmflicker"),
+  filmflickerval: document.getElementById("filmflickerval"),
+  filmnegview: document.getElementById("filmnegview"),
   lens: document.getElementById("lens"),
   lensval: document.getElementById("lensval"),
   bloom: document.getElementById("bloom"),
@@ -76,7 +106,7 @@ const els = {
   status: document.getElementById("status"),
 };
 
-let renderer, pipeline, source = null;
+let renderer, pipeline, filmPipeline, source = null;
 let currentVideo = null;
 let videoFrameDirty = false;
 let scrubbing = false;
@@ -88,6 +118,7 @@ let recLoopWas = false;
 let frame = 0;
 let mode = "analog";
 let presetKey = "cybershot";
+let filmPresetKey = FILM_PRESET_KEYS[0];
 let resolutionScale = 0.65;
 let busy = false;
 let freezeNoise = false;
@@ -114,14 +145,17 @@ async function init() {
   await renderer.init();
 
   pipeline = new Pipeline(renderer);
-  pipeline.setMode(mode);
+  pipeline.setMode(mode === "film" ? "digital" : mode);
+  filmPipeline = new FilmPipeline(renderer);
 
   buildPresetUI();
+  buildFilmPresetUI();
   buildStageUI();
   wireInput();
 
   await loadImage(DEFAULT_IMAGE);
   applyPreset(pipeline.ctx, PRESETS[presetKey]);
+  applyFilmPreset(filmPipeline.ctx, FILM_PRESETS[filmPresetKey]);
   syncEffectUI();
 
   renderer.setAnimationLoop(tick);
@@ -140,6 +174,21 @@ function buildPresetUI() {
     applyPreset(pipeline.ctx, PRESETS[presetKey]);
     syncEffectUI();
     resizeForSource();
+  });
+}
+
+function buildFilmPresetUI() {
+  for (const key of FILM_PRESET_KEYS) {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = `${key} — ${FILM_PRESETS[key].name}`;
+    els.filmpreset.appendChild(opt);
+  }
+  els.filmpreset.value = filmPresetKey;
+  els.filmpreset.addEventListener("change", () => {
+    filmPresetKey = els.filmpreset.value;
+    applyFilmPreset(filmPipeline.ctx, FILM_PRESETS[filmPresetKey]);
+    syncEffectUI();
   });
 }
 
@@ -172,7 +221,7 @@ function setSlider(slider, label, value, scale = 100, digits = 2) {
 function wireInput() {
   els.mode.addEventListener("change", () => {
     mode = els.mode.value;
-    pipeline.setMode(mode);
+    if (mode !== "film") pipeline.setMode(mode);
     syncModeUI();
     syncFreezeUI();
     resizeForSource();
@@ -292,6 +341,34 @@ function wireInput() {
     pipeline.ctx.P.analogHeadSwitch.value = v;
     els.headswitchval.textContent = v.toFixed(2);
   });
+
+  const wireFilmSlider = (el, valEl, apply) => {
+    el.addEventListener("input", () => {
+      const v = el.value / 100;
+      apply(v);
+      valEl.textContent = v.toFixed(2);
+    });
+  };
+  const FP = () => filmPipeline.ctx.P;
+  wireFilmSlider(els.filmexposure, els.filmexposureval, (v) => { FP().exposure.value = v; });
+  wireFilmSlider(els.filmgamma, els.filmgammaval, (v) => { FP().inputGamma.value = v; });
+  wireFilmSlider(els.filmgrain, els.filmgrainval, (v) => { FP().grainStrength.value = v; });
+  wireFilmSlider(els.filmgrainsize, els.filmgrainsizeval, (v) => { FP().grainSize.value = v; });
+  wireFilmSlider(els.filmgrainsat, els.filmgrainsatval, (v) => { FP().grainSaturation.value = v; });
+  wireFilmSlider(els.filmhalation, els.filmhalationval, (v) => { FP().halStrength.value = v; });
+  wireFilmSlider(els.filmhalthreshold, els.filmhalthresholdval, (v) => { FP().halThreshold.value = v; });
+  wireFilmSlider(els.filmhalradius, els.filmhalradiusval, (v) => { FP().halRadius.value = v; });
+  wireFilmSlider(els.filmprintexp, els.filmprintexpval, (v) => { FP().printExposure.value = v * 0.301; });
+  wireFilmSlider(els.filmwarmth, els.filmwarmthval, (v) => { FP().printWarmth.value = v; });
+  wireFilmSlider(els.filmweave, els.filmweaveval, (v) => { FP().weave.value = v; });
+  wireFilmSlider(els.filmflicker, els.filmflickerval, (v) => { FP().flicker.value = v; });
+  els.filmnegview.addEventListener("click", () => {
+    const on = filmPipeline.ctx.P.negativeView.value < 0.5;
+    filmPipeline.ctx.P.negativeView.value = on ? 1 : 0;
+    els.filmnegview.textContent = on ? "show print" : "show negative";
+    els.filmnegview.classList.toggle("active", on);
+  });
+
   els.freeze.addEventListener("click", () => {
     freezeNoise = !freezeNoise;
     syncFreezeUI();
@@ -361,15 +438,15 @@ function wireInput() {
 }
 
 function syncModeUI() {
-  const analogMode = mode === "analog";
-  els.digitalControls.hidden = analogMode;
-  els.stageControls.hidden = analogMode;
-  els.analogControls.hidden = !analogMode;
+  els.digitalControls.hidden = mode !== "digital";
+  els.stageControls.hidden = mode !== "digital";
+  els.analogControls.hidden = mode !== "analog";
+  els.filmControls.hidden = mode !== "film";
   els.mode.value = mode;
 }
 
 function syncFreezeUI() {
-  const noun = mode === "analog" ? "tape" : "noise";
+  const noun = mode === "analog" ? "tape" : mode === "film" ? "grain" : "noise";
   els.freeze.textContent = freezeNoise ? `unfreeze ${noun}` : `freeze ${noun}`;
   els.freeze.classList.toggle("active", freezeNoise);
 }
@@ -443,6 +520,20 @@ function syncEffectUI() {
   const headSwitch = pipeline.ctx.P.analogHeadSwitch.value;
   setSlider(els.headswitch, els.headswitchval, headSwitch);
 
+  const FP = filmPipeline.ctx.P;
+  setSlider(els.filmexposure, els.filmexposureval, FP.exposure.value);
+  setSlider(els.filmgamma, els.filmgammaval, FP.inputGamma.value);
+  setSlider(els.filmgrain, els.filmgrainval, FP.grainStrength.value);
+  setSlider(els.filmgrainsize, els.filmgrainsizeval, FP.grainSize.value);
+  setSlider(els.filmgrainsat, els.filmgrainsatval, FP.grainSaturation.value);
+  setSlider(els.filmhalation, els.filmhalationval, FP.halStrength.value);
+  setSlider(els.filmhalthreshold, els.filmhalthresholdval, FP.halThreshold.value);
+  setSlider(els.filmhalradius, els.filmhalradiusval, FP.halRadius.value);
+  setSlider(els.filmprintexp, els.filmprintexpval, FP.printExposure.value / 0.301);
+  setSlider(els.filmwarmth, els.filmwarmthval, FP.printWarmth.value);
+  setSlider(els.filmweave, els.filmweaveval, FP.weave.value);
+  setSlider(els.filmflicker, els.filmflickerval, FP.flicker.value);
+
   syncFreezeUI();
 }
 
@@ -487,6 +578,7 @@ function setVideoSource(video, label) {
   source = tex;
   videoFrameDirty = true;       // push the first (paused) frame through once
   pipeline.setSource(source);
+  filmPipeline.setSource(source);
   resizeForSource();
   els.videoControls.hidden = false;
   els.volume.value = Math.round(userVolume * 100);
@@ -551,6 +643,7 @@ function setSource(bitmap, label) {
   source.userData.h = bitmap.height;
   source.userData.label = label;
   pipeline.setSource(source);
+  filmPipeline.setSource(source);
   resizeForSource();
 }
 
@@ -558,7 +651,8 @@ function resizeForSource() {
   if (!source) return;
   const imgW = source.userData.w;
   const imgH = source.userData.h;
-  const displaySensor = PRESETS[presetKey].sensor_resolution;
+  // film is not tied to a camera sensor — it works at the full display fit
+  const displaySensor = mode === "film" ? [MAX_WORK, MAX_WORK] : PRESETS[presetKey].sensor_resolution;
   const processSensor = mode === "analog" ? ANALOG_WORK : displaySensor;
   const displayFit = Math.min(displaySensor[0] / imgW, displaySensor[1] / imgH, MAX_WORK / imgW, MAX_WORK / imgH, 1.0);
   const processFit = Math.min(processSensor[0] / imgW, processSensor[1] / imgH, MAX_WORK / imgW, MAX_WORK / imgH, 1.0);
@@ -570,7 +664,8 @@ function resizeForSource() {
   renderer.setSize(w, h, false);
   els.canvas.style.width = `${displayW}px`;
   els.canvas.style.height = `${displayH}px`;
-  pipeline.setSize(w, h);
+  if (mode === "film") filmPipeline.setSize(w, h);
+  else pipeline.setSize(w, h);
 }
 
 function pickRecMime(withAudio) {
@@ -660,7 +755,8 @@ async function tick() {
   }
 
   try {
-    await pipeline.render(frame);
+    if (mode === "film") await filmPipeline.render(frame);
+    else await pipeline.render(frame);
   } catch (err) {
     setStatus("render error:\n" + (err?.message || err));
     renderer.setAnimationLoop(null);
@@ -676,10 +772,14 @@ async function tick() {
   if (now - fpsLast >= 500) {
     fps = Math.round((fpsCount * 1000) / (now - fpsLast));
     fpsLast = now; fpsCount = 0;
-    const r = pipeline.ctx.resolution.value;
+    const r = mode === "film" ? filmPipeline.ctx.resolution.value : pipeline.ctx.resolution.value;
     const frozen = freezeNoise ? " · frozen" : "";
-    const modeLabel = mode === "analog" ? "Analog" : PRESETS[presetKey].name;
-    const stageLabel = mode === "analog" ? "analog mode" : `${pipeline.enabled.size}/${STAGE_DEFS.length} stages`;
+    const modeLabel = mode === "analog" ? "Analog"
+      : mode === "film" ? FILM_PRESETS[filmPresetKey].name
+      : PRESETS[presetKey].name;
+    const stageLabel = mode === "analog" ? "analog mode"
+      : mode === "film" ? "film mode"
+      : `${pipeline.enabled.size}/${STAGE_DEFS.length} stages`;
     const rec = recorder
       ? (currentVideo ? ` · ● REC ${fmtTime(currentVideo.currentTime)}/${fmtTime(currentVideo.duration)}` : " · ● REC")
       : "";

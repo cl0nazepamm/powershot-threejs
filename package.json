@@ -16,14 +16,16 @@
   "exports": {
     ".": "./src/index.js",
     "./pipeline": "./src/pipeline.js",
-    "./presets": "./src/presets.js"
+    "./presets": "./src/presets.js",
+    "./film": "./src/film.js"
   },
   "files": [
     "LICENSE",
     "README.md",
     "src/index.js",
     "src/pipeline.js",
-    "src/presets.js"
+    "src/presets.js",
+    "src/film.js"
   ],
   "keywords": [
     "threejs",
@@ -37,7 +39,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "check": "node --check src/index.js && node --check src/main.js && node --check src/pipeline.js && node --check src/presets.js"
+    "check": "node --check src/index.js && node --check src/main.js && node --check src/pipeline.js && node --check src/presets.js && node --check src/film.js"
   },
   "devDependencies": {
     "three": "^0.184.0",

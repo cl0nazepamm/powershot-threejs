@@ -127,7 +127,8 @@ label {
 }
 
 #digital-controls,
-#analog-controls {
+#analog-controls,
+#film-controls {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -135,7 +136,8 @@ label {
 }
 
 #digital-controls[hidden],
-#analog-controls[hidden] {
+#analog-controls[hidden],
+#film-controls[hidden] {
   display: none;
 }
 
@@ -153,6 +155,7 @@ label {
 #panel > div,
 #digital-controls > div,
 #analog-controls > div,
+#film-controls > div,
 #stage-controls {
   min-width: 0;
 }
