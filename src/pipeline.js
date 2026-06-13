@@ -714,6 +714,27 @@ function dctNorm1D(freq) {
   return mix(float(Math.SQRT1_2), float(1.0), step(0.5, freq)).mul(0.5);
 }
 
+// Firefox's WGSL compiler (Naga) rejects compile-time-constant *sub*expressions
+// inside runtime shader code ("Abstract types may only appear in constant
+// expressions"); Chrome's Tint just folds them. dctBasis/dctNorm1D build exactly
+// such subtrees when one argument is a JS loop constant: `(2*pos+1)` when the
+// sample position is constant (forward DCT), and the whole `step()/mix()` chain
+// when the frequency is constant (inverse DCT). These variants collapse the
+// constant part to a single literal up front — identical f32 arithmetic, but no
+// all-abstract subtree for Naga to choke on.
+
+// forward transforms: the sample position is the compile-time constant, so
+// (2*pos+1) — an exact integer — becomes one literal instead of `x*2.0+1.0`.
+function dctBasisConstPos(posConst, freq) {
+  return cos(float(2 * posConst + 1).mul(freq).mul(0.19634954084936207));
+}
+
+// inverse transforms: the frequency is the compile-time constant, so the entire
+// normalization is `mix(SQRT1_2, 1, step(0.5, freq)) * 0.5` evaluated in JS.
+function dctNorm1DConst(freq) {
+  return (freq < 0.5 ? Math.SQRT1_2 : 1.0) * 0.5;
+}
+
 function samplePixel(tex, ctx, p) {
   const samplePos = min(p.add(0.5), ctx.resolution.sub(0.5));
   return texture(tex, samplePos.div(ctx.resolution)).rgb;
@@ -784,16 +805,23 @@ const JPEG_CHROMA_Q = [
 let jpegQTexture = null;
 function getJpegQTexture() {
   if (!jpegQTexture) {
-    const data = new Float32Array(64 * 4);
+    // Half-float, not fp32: every quant value is an integer <= 255, which fp16
+    // stores exactly, so the sampled numbers are identical. The reason to avoid
+    // fp32 here is portability — rgba32float is only sampleable where the WebGPU
+    // `float32-filterable` feature exists (Chrome/Dawn). Firefox doesn't expose
+    // it, so an fp32 sampled texture made the whole JPEG stage fail (black frame)
+    // there. rgba16float is filterable on every backend.
+    const half = THREE.DataUtils.toHalfFloat;
+    const data = new Uint16Array(64 * 4);
     for (let y = 0; y < 8; y += 1) {
       for (let x = 0; x < 8; x += 1) {
         const i = (y * 8 + x) * 4;
-        data[i] = JPEG_LUMA_Q[y][x];
-        data[i + 1] = JPEG_CHROMA_Q[y][x];
-        data[i + 3] = 1;
+        data[i] = half(JPEG_LUMA_Q[y][x]);
+        data[i + 1] = half(JPEG_CHROMA_Q[y][x]);
+        data[i + 3] = half(1);
       }
     }
-    jpegQTexture = new THREE.DataTexture(data, 8, 8, THREE.RGBAFormat, THREE.FloatType);
+    jpegQTexture = new THREE.DataTexture(data, 8, 8, THREE.RGBAFormat, THREE.HalfFloatType);
     jpegQTexture.minFilter = THREE.NearestFilter;
     jpegQTexture.magFilter = THREE.NearestFilter;
     jpegQTexture.needsUpdate = true;
@@ -821,7 +849,7 @@ function stJpegDctRows(tex, ctx) {
   const u = local.x;
   let sum = vec3(0.0);
   for (let x = 0; x < 8; x += 1) {
-    sum = sum.add(jpegInput(tex, ctx, block.add(vec2(x, local.y))).mul(dctBasis(float(x), u)));
+    sum = sum.add(jpegInput(tex, ctx, block.add(vec2(x, local.y))).mul(dctBasisConstPos(x, u)));
   }
   return sum.mul(dctNorm1D(u));
 }
@@ -834,7 +862,7 @@ function stJpegDctColsQuant(tex, ctx) {
   const v = local.y;
   let sum = vec3(0.0);
   for (let y = 0; y < 8; y += 1) {
-    sum = sum.add(sampleDct(tex, ctx, block.add(vec2(u, y))).mul(dctBasis(float(y), v)));
+    sum = sum.add(sampleDct(tex, ctx, block.add(vec2(u, y))).mul(dctBasisConstPos(y, v)));
   }
   const coeff = sum.mul(dctNorm1D(v));
   const q = jpegQuantStep(ctx, u, v);
@@ -849,7 +877,7 @@ function stJpegIdctCols(tex, ctx) {
   const local = mod(p, 8.0);
   let sum = vec3(0.0);
   for (let v = 0; v < 8; v += 1) {
-    const by = dctBasis(local.y, float(v)).mul(dctNorm1D(float(v)));
+    const by = dctBasis(local.y, float(v)).mul(dctNorm1DConst(v));
     sum = sum.add(sampleDct(tex, ctx, block.add(vec2(local.x, v))).mul(by));
   }
   return sum;
@@ -861,7 +889,7 @@ function stJpegIdctRows(tex, ctx, originalTex) {
   const local = mod(p, 8.0);
   let sum = vec3(0.0);
   for (let u = 0; u < 8; u += 1) {
-    const bx = dctBasis(local.x, float(u)).mul(dctNorm1D(float(u)));
+    const bx = dctBasis(local.x, float(u)).mul(dctNorm1DConst(u));
     sum = sum.add(sampleDct(tex, ctx, block.add(vec2(u, local.y))).mul(bx));
   }
   const original = samplePixel(originalTex, ctx, p);
@@ -1053,15 +1081,22 @@ export class Pipeline {
     // quarter-height pair for the CCD bloom smear (full width)
     this.rtBloomA = new THREE.RenderTarget(1, 1, { ...opts });
     this.rtBloomB = new THREE.RenderTarget(1, 1, { ...opts });
-    // fp32 scratch targets for split-pass intermediates (BNR guide, JPEG
-    // IDCT columns). These values previously lived in registers inside one
-    // big pass; storing them at half precision would add rounding the
-    // original never had, so fp32 keeps the split passes numerically
-    // faithful. Nearest filtering because every consumer samples exact texel
-    // centers — and it avoids needing float32-filterable.
+    // Scratch targets for split-pass intermediates (BNR guide, JPEG IDCT
+    // columns). These values previously lived in registers inside one big pass;
+    // storing them at half precision adds rounding the original never had, so
+    // fp32 keeps the split passes numerically faithful. Nearest filtering
+    // because every consumer samples exact texel centers.
+    //
+    // fp32 sampled textures only work where the WebGPU `float32-filterable`
+    // feature exists (Chrome/Dawn). Firefox doesn't expose it and would reject
+    // them, so fall back to half-float there — the same intermediates the rest
+    // of the chain already uses, and a working frame beats a faithful black one.
+    const preciseType = renderer.hasFeature("float32-filterable")
+      ? THREE.FloatType
+      : THREE.HalfFloatType;
     const preciseOpts = {
       ...opts,
-      type: THREE.FloatType,
+      type: preciseType,
       minFilter: THREE.NearestFilter,
       magFilter: THREE.NearestFilter,
     };

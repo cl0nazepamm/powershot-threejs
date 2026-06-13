@@ -109,6 +109,10 @@ const els = {
 let renderer, pipeline, filmPipeline, source = null;
 let currentVideo = null;
 let videoFrameDirty = false;
+// Firefox's WebGPU can't copy an HTMLVideoElement directly into a texture; when
+// that's the case we draw each frame into a 2D canvas first and upload that.
+let videoBridgeCanvas = null;
+let videoBridgeCtx = null;
 let scrubbing = false;
 let userMuted = false;
 let userVolume = 1;
@@ -143,6 +147,13 @@ async function init() {
   // present our gamma-encoded 0..1 values verbatim (no extra sRGB encode)
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
   await renderer.init();
+
+  // WebGPU validation errors are otherwise swallowed (the frame just goes
+  // black). Surface them on screen + console so failures are diagnosable.
+  renderer.backend?.device?.addEventListener?.("uncapturederror", (e) => {
+    console.error("WebGPU uncaptured error:", e.error);
+    setStatus("WebGPU error:\n" + String(e.error?.message || e.error).slice(0, 500));
+  });
 
   pipeline = new Pipeline(renderer);
   pipeline.setMode(mode === "film" ? "digital" : mode);
@@ -556,15 +567,58 @@ function loadVideo(file) {
   video.addEventListener("play", syncTransportUI);
   video.addEventListener("pause", syncTransportUI);
   // loadeddata → first frame is decoded, so we can show it paused (no autoplay)
-  video.addEventListener("loadeddata", () => setVideoSource(video, file.name), { once: true });
+  video.addEventListener("loadeddata", () => {
+    setVideoSource(video, file.name).catch((err) => setStatus(`could not load ${file.name}\n${err?.message || err}`));
+  }, { once: true });
 }
 
-function setVideoSource(video, label) {
+// Probe once whether this WebGPU backend can copy an HTMLVideoElement straight
+// into a texture. Chrome/Dawn can; Firefox can't and instead throws / raises a
+// validation error that three.js swallows, leaving every video frame black. We
+// detect that and route through a canvas instead. Doing a real probe (rather
+// than sniffing the UA) means we automatically use the fast direct path again
+// once a browser gains support. The video must already have a decoded frame.
+async function videoUploadUnsupported(video) {
+  const device = renderer?.backend?.device;
+  if (!device) return false; // can't probe — assume direct works
+  let tmp;
+  let threw = false;
+  device.pushErrorScope("validation");
+  try {
+    tmp = device.createTexture({
+      size: [1, 1],
+      format: "rgba8unorm",
+      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    device.queue.copyExternalImageToTexture(
+      { source: video }, { texture: tmp }, { width: 1, height: 1 },
+    );
+  } catch {
+    threw = true;
+  }
+  const err = await device.popErrorScope();
+  tmp?.destroy();
+  return threw || err !== null;
+}
+
+async function setVideoSource(video, label) {
   if (source) source.dispose();
   currentVideo = video;
   // Plain Texture (not VideoTexture) so the frame goes through the exact same
   // NoColorSpace upload path images use — keeps the filtered look identical.
-  const tex = new THREE.Texture(video);
+  // On backends that can't upload a video element, draw it into a 2D canvas
+  // first (every backend accepts a canvas) and upload that instead.
+  videoBridgeCanvas = videoBridgeCtx = null;
+  let uploadSource = video;
+  if (await videoUploadUnsupported(video)) {
+    videoBridgeCanvas = document.createElement("canvas");
+    videoBridgeCanvas.width = video.videoWidth;
+    videoBridgeCanvas.height = video.videoHeight;
+    videoBridgeCtx = videoBridgeCanvas.getContext("2d");
+    videoBridgeCtx.drawImage(video, 0, 0); // seed the first (paused) frame
+    uploadSource = videoBridgeCanvas;
+  }
+  const tex = new THREE.Texture(uploadSource);
   tex.colorSpace = THREE.NoColorSpace;
   tex.flipY = false;
   tex.minFilter = THREE.LinearFilter; // no per-frame mipmap regen for video
@@ -592,6 +646,7 @@ function stopVideo() {
   currentVideo.pause();
   URL.revokeObjectURL(currentVideo.src);
   currentVideo = null;
+  videoBridgeCanvas = videoBridgeCtx = null;
   els.videoControls.hidden = true;
 }
 
@@ -748,6 +803,9 @@ async function tick() {
   // re-upload the current video frame while it plays (or once after a seek)
   if (source.userData.isVideo && currentVideo && currentVideo.readyState >= 2) {
     if (!currentVideo.paused || videoFrameDirty) {
+      if (videoBridgeCtx) {
+        videoBridgeCtx.drawImage(currentVideo, 0, 0, videoBridgeCanvas.width, videoBridgeCanvas.height);
+      }
       source.needsUpdate = true;
       videoFrameDirty = false;
     }
