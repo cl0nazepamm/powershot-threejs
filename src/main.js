@@ -148,13 +148,6 @@ async function init() {
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
   await renderer.init();
 
-  // WebGPU validation errors are otherwise swallowed (the frame just goes
-  // black). Surface them on screen + console so failures are diagnosable.
-  renderer.backend?.device?.addEventListener?.("uncapturederror", (e) => {
-    console.error("WebGPU uncaptured error:", e.error);
-    setStatus("WebGPU error:\n" + String(e.error?.message || e.error).slice(0, 500));
-  });
-
   pipeline = new Pipeline(renderer);
   pipeline.setMode(mode === "film" ? "digital" : mode);
   filmPipeline = new FilmPipeline(renderer);
