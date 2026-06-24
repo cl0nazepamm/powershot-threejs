@@ -3,6 +3,7 @@ import * as THREE from "three/webgpu";
 import {
   Pipeline, PRESETS, PRESET_KEYS, STAGE_DEFS, applyPreset,
   FilmPipeline, FILM_PRESETS, FILM_PRESET_KEYS, applyFilmPreset,
+  InfraredPipeline, INFRARED_PRESETS, INFRARED_PRESET_KEYS, applyInfraredPreset,
 } from "./index.js";
 
 const MAX_WORK = 1600; // cap working resolution for snappy realtime
@@ -18,6 +19,7 @@ const els = {
   digitalControls: document.getElementById("digital-controls"),
   analogControls: document.getElementById("analog-controls"),
   filmControls: document.getElementById("film-controls"),
+  infraredControls: document.getElementById("infrared-controls"),
   filmpreset: document.getElementById("filmpreset"),
   filmexposure: document.getElementById("filmexposure"),
   filmexposureval: document.getElementById("filmexposureval"),
@@ -44,6 +46,25 @@ const els = {
   filmflicker: document.getElementById("filmflicker"),
   filmflickerval: document.getElementById("filmflickerval"),
   filmnegview: document.getElementById("filmnegview"),
+  infraredpreset: document.getElementById("infraredpreset"),
+  infraredexposure: document.getElementById("infraredexposure"),
+  infraredexposureval: document.getElementById("infraredexposureval"),
+  infraredresponse: document.getElementById("infraredresponse"),
+  infraredresponseval: document.getElementById("infraredresponseval"),
+  infraredlocalgain: document.getElementById("infraredlocalgain"),
+  infraredlocalgainval: document.getElementById("infraredlocalgainval"),
+  infraredglow: document.getElementById("infraredglow"),
+  infraredglowval: document.getElementById("infraredglowval"),
+  infraredglowthreshold: document.getElementById("infraredglowthreshold"),
+  infraredglowthresholdval: document.getElementById("infraredglowthresholdval"),
+  infraredeyes: document.getElementById("infraredeyes"),
+  infraredeyesval: document.getElementById("infraredeyesval"),
+  infrarednoise: document.getElementById("infrarednoise"),
+  infrarednoiseval: document.getElementById("infrarednoiseval"),
+  infraredvignette: document.getElementById("infraredvignette"),
+  infraredvignetteval: document.getElementById("infraredvignetteval"),
+  infraredhotspot: document.getElementById("infraredhotspot"),
+  infraredhotspotval: document.getElementById("infraredhotspotval"),
   lens: document.getElementById("lens"),
   lensval: document.getElementById("lensval"),
   bloom: document.getElementById("bloom"),
@@ -106,7 +127,7 @@ const els = {
   status: document.getElementById("status"),
 };
 
-let renderer, pipeline, filmPipeline, source = null;
+let renderer, pipeline, filmPipeline, infraredPipeline, source = null;
 let currentVideo = null;
 let videoFrameDirty = false;
 // Firefox's WebGPU can't copy an HTMLVideoElement directly into a texture; when
@@ -123,6 +144,7 @@ let frame = 0;
 let mode = "analog";
 let presetKey = "cybershot";
 let filmPresetKey = FILM_PRESET_KEYS[0];
+let infraredPresetKey = "white_phosphor";
 let resolutionScale = 0.65;
 let busy = false;
 let freezeNoise = false;
@@ -149,17 +171,20 @@ async function init() {
   await renderer.init();
 
   pipeline = new Pipeline(renderer);
-  pipeline.setMode(mode === "film" ? "digital" : mode);
+  pipeline.setMode(mode === "analog" ? "analog" : "digital");
   filmPipeline = new FilmPipeline(renderer);
+  infraredPipeline = new InfraredPipeline(renderer);
 
   buildPresetUI();
   buildFilmPresetUI();
+  buildInfraredPresetUI();
   buildStageUI();
   wireInput();
 
   await loadImage(DEFAULT_IMAGE);
   applyPreset(pipeline.ctx, PRESETS[presetKey]);
   applyFilmPreset(filmPipeline.ctx, FILM_PRESETS[filmPresetKey]);
+  applyInfraredPreset(infraredPipeline.ctx, INFRARED_PRESETS[infraredPresetKey]);
   syncEffectUI();
 
   renderer.setAnimationLoop(tick);
@@ -196,6 +221,23 @@ function buildFilmPresetUI() {
   });
 }
 
+function buildInfraredPresetUI() {
+  for (const key of INFRARED_PRESET_KEYS) {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = `${key} — ${INFRARED_PRESETS[key].name}`;
+    els.infraredpreset.appendChild(opt);
+  }
+  els.infraredpreset.value = infraredPresetKey;
+  els.infraredpreset.addEventListener("change", () => {
+    infraredPresetKey = els.infraredpreset.value;
+    applyInfraredPreset(infraredPipeline.ctx, INFRARED_PRESETS[infraredPresetKey]);
+    infraredPipeline.clearHistory();
+    syncEffectUI();
+    resizeForSource();
+  });
+}
+
 function buildStageUI() {
   els.stages.innerHTML = "";
   for (const stage of STAGE_DEFS) {
@@ -225,7 +267,7 @@ function setSlider(slider, label, value, scale = 100, digits = 2) {
 function wireInput() {
   els.mode.addEventListener("change", () => {
     mode = els.mode.value;
-    if (mode !== "film") pipeline.setMode(mode);
+    if (mode === "analog" || mode === "digital") pipeline.setMode(mode);
     syncModeUI();
     syncFreezeUI();
     resizeForSource();
@@ -373,6 +415,24 @@ function wireInput() {
     els.filmnegview.classList.toggle("active", on);
   });
 
+  const wireInfraredSlider = (el, valEl, apply) => {
+    el.addEventListener("input", () => {
+      const v = el.value / 100;
+      apply(v);
+      valEl.textContent = v.toFixed(2);
+    });
+  };
+  const IP = () => infraredPipeline.ctx.P;
+  wireInfraredSlider(els.infraredexposure, els.infraredexposureval, (v) => { IP().exposure.value = v; });
+  wireInfraredSlider(els.infraredresponse, els.infraredresponseval, (v) => { IP().nirInput.value = v; });
+  wireInfraredSlider(els.infraredlocalgain, els.infraredlocalgainval, (v) => { IP().localGain.value = v; });
+  wireInfraredSlider(els.infraredglow, els.infraredglowval, (v) => { IP().glowStrength.value = v; });
+  wireInfraredSlider(els.infraredglowthreshold, els.infraredglowthresholdval, (v) => { IP().glowThreshold.value = v; });
+  wireInfraredSlider(els.infraredeyes, els.infraredeyesval, (v) => { IP().eyeStrength.value = v; });
+  wireInfraredSlider(els.infrarednoise, els.infrarednoiseval, (v) => { IP().noiseAmount.value = v; });
+  wireInfraredSlider(els.infraredvignette, els.infraredvignetteval, (v) => { IP().vignette.value = v; });
+  wireInfraredSlider(els.infraredhotspot, els.infraredhotspotval, (v) => { IP().hotspot.value = v; });
+
   els.freeze.addEventListener("click", () => {
     freezeNoise = !freezeNoise;
     syncFreezeUI();
@@ -446,11 +506,15 @@ function syncModeUI() {
   els.stageControls.hidden = mode !== "digital";
   els.analogControls.hidden = mode !== "analog";
   els.filmControls.hidden = mode !== "film";
+  els.infraredControls.hidden = mode !== "infrared";
   els.mode.value = mode;
 }
 
 function syncFreezeUI() {
-  const noun = mode === "analog" ? "tape" : mode === "film" ? "grain" : "noise";
+  const noun = mode === "analog" ? "tape"
+    : mode === "film" ? "grain"
+    : mode === "infrared" ? "phosphor"
+    : "noise";
   els.freeze.textContent = freezeNoise ? `unfreeze ${noun}` : `freeze ${noun}`;
   els.freeze.classList.toggle("active", freezeNoise);
 }
@@ -537,6 +601,18 @@ function syncEffectUI() {
   setSlider(els.filmwarmth, els.filmwarmthval, FP.printWarmth.value);
   setSlider(els.filmweave, els.filmweaveval, FP.weave.value);
   setSlider(els.filmflicker, els.filmflickerval, FP.flicker.value);
+
+  els.infraredpreset.value = infraredPresetKey;
+  const IP = infraredPipeline.ctx.P;
+  setSlider(els.infraredexposure, els.infraredexposureval, IP.exposure.value);
+  setSlider(els.infraredresponse, els.infraredresponseval, IP.nirInput.value);
+  setSlider(els.infraredlocalgain, els.infraredlocalgainval, IP.localGain.value);
+  setSlider(els.infraredglow, els.infraredglowval, IP.glowStrength.value);
+  setSlider(els.infraredglowthreshold, els.infraredglowthresholdval, IP.glowThreshold.value);
+  setSlider(els.infraredeyes, els.infraredeyesval, IP.eyeStrength.value);
+  setSlider(els.infrarednoise, els.infrarednoiseval, IP.noiseAmount.value);
+  setSlider(els.infraredvignette, els.infraredvignetteval, IP.vignette.value);
+  setSlider(els.infraredhotspot, els.infraredhotspotval, IP.hotspot.value);
 
   syncFreezeUI();
 }
@@ -626,6 +702,7 @@ async function setVideoSource(video, label) {
   videoFrameDirty = true;       // push the first (paused) frame through once
   pipeline.setSource(source);
   filmPipeline.setSource(source);
+  infraredPipeline.setSource(source);
   resizeForSource();
   els.videoControls.hidden = false;
   els.volume.value = Math.round(userVolume * 100);
@@ -692,6 +769,7 @@ function setSource(bitmap, label) {
   source.userData.label = label;
   pipeline.setSource(source);
   filmPipeline.setSource(source);
+  infraredPipeline.setSource(source);
   resizeForSource();
 }
 
@@ -700,7 +778,9 @@ function resizeForSource() {
   const imgW = source.userData.w;
   const imgH = source.userData.h;
   // film is not tied to a camera sensor — it works at the full display fit
-  const displaySensor = mode === "film" ? [MAX_WORK, MAX_WORK] : PRESETS[presetKey].sensor_resolution;
+  const displaySensor = mode === "film" ? [MAX_WORK, MAX_WORK]
+    : mode === "infrared" ? INFRARED_PRESETS[infraredPresetKey].sensor_resolution
+    : PRESETS[presetKey].sensor_resolution;
   const processSensor = mode === "analog" ? ANALOG_WORK : displaySensor;
   const displayFit = Math.min(displaySensor[0] / imgW, displaySensor[1] / imgH, MAX_WORK / imgW, MAX_WORK / imgH, 1.0);
   const processFit = Math.min(processSensor[0] / imgW, processSensor[1] / imgH, MAX_WORK / imgW, MAX_WORK / imgH, 1.0);
@@ -713,6 +793,7 @@ function resizeForSource() {
   els.canvas.style.width = `${displayW}px`;
   els.canvas.style.height = `${displayH}px`;
   if (mode === "film") filmPipeline.setSize(w, h);
+  else if (mode === "infrared") infraredPipeline.setSize(w, h);
   else pipeline.setSize(w, h);
 }
 
@@ -807,6 +888,7 @@ async function tick() {
 
   try {
     if (mode === "film") await filmPipeline.render(frame);
+    else if (mode === "infrared") await infraredPipeline.render(frame);
     else await pipeline.render(frame);
   } catch (err) {
     setStatus("render error:\n" + (err?.message || err));
@@ -823,13 +905,17 @@ async function tick() {
   if (now - fpsLast >= 500) {
     fps = Math.round((fpsCount * 1000) / (now - fpsLast));
     fpsLast = now; fpsCount = 0;
-    const r = mode === "film" ? filmPipeline.ctx.resolution.value : pipeline.ctx.resolution.value;
+    const r = mode === "film" ? filmPipeline.ctx.resolution.value
+      : mode === "infrared" ? infraredPipeline.ctx.resolution.value
+      : pipeline.ctx.resolution.value;
     const frozen = freezeNoise ? " · frozen" : "";
     const modeLabel = mode === "analog" ? "Analog"
       : mode === "film" ? FILM_PRESETS[filmPresetKey].name
+      : mode === "infrared" ? INFRARED_PRESETS[infraredPresetKey].name
       : PRESETS[presetKey].name;
     const stageLabel = mode === "analog" ? "analog mode"
       : mode === "film" ? "film mode"
+      : mode === "infrared" ? "infrared mode"
       : `${pipeline.enabled.size}/${STAGE_DEFS.length} stages`;
     const rec = recorder
       ? (currentVideo ? ` · ● REC ${fmtTime(currentVideo.currentTime)}/${fmtTime(currentVideo.duration)}` : " · ● REC")

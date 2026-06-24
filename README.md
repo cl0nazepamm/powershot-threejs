@@ -72,6 +72,42 @@ film.ctx.P.negativeView.value = 0; // set to 1 to inspect the negative
 film.renderTexture(inputTexture, frame);
 ```
 
+For green infrared / night-vision rendering, use `InfraredPipeline`. It has a dedicated pseudo-NIR signal path with local gain, broad phosphor bloom, pale highlight cores, monochrome sensor noise, tube vignette, and optional eye-mask gating. The default `ethereal_green` preset is tuned for a soft REC-like green night-vision look.
+
+```js
+import * as THREE from "three/webgpu";
+import {
+  InfraredPipeline,
+  INFRARED_PRESETS,
+  applyInfraredPreset,
+} from "powershot-threejs";
+
+const renderer = new THREE.WebGPURenderer({ canvas });
+await renderer.init();
+
+const infrared = new InfraredPipeline(renderer);
+infrared.setSize(width, height);
+infrared.setInputMode("rgb"); // "rgb" simulates NIR from RGB, "nir" treats the source as mono/real NIR
+applyInfraredPreset(infrared.ctx, INFRARED_PRESETS.ethereal_green);
+
+// Optional aligned mask texture for eye/retinal flare regions.
+infrared.setEyeMask(maskTexture);
+
+infrared.renderTexture(inputTexture, frame);
+```
+
+Useful infrared controls:
+
+- `infrared.ctx.power.value` - blends between source and infrared render.
+- `infrared.ctx.P.exposure.value` - input amplification in stops.
+- `infrared.ctx.P.localGain.value` - dark-region adaptation strength.
+- `infrared.ctx.P.glowStrength.value` - broad green bloom amount.
+- `infrared.ctx.P.eyeStrength.value` - compact highlight / eye flare amount.
+- `infrared.ctx.P.noiseAmount.value` - master monochrome sensor and phosphor noise.
+- `infrared.setInputMode("nir")` - use when the input is already monochrome or actual NIR.
+
+RGB images do not contain actual infrared reflectance. The default path is an artistic pseudo-NIR approximation; pass real monochrome/NIR input and call `setInputMode("nir")` when you have real IR source material.
+
 For a normal Three.js scene, render your scene into a `THREE.RenderTarget`, then pass `target.texture` to `renderTexture()`:
 
 ```js
@@ -81,6 +117,63 @@ sceneRenderer.setRenderTarget(null);
 
 powershot.renderTexture(sceneTarget.texture, frame);
 ```
+
+If your app already uses `THREE.RenderPipeline`, wrap the output node you already had and make any PowerShot effect the final stage:
+
+```js
+import * as THREE from "three/webgpu";
+import { pass } from "three/tsl";
+import {
+  FilmPipeline,
+  InfraredPipeline,
+  Pipeline,
+  PRESETS,
+  applyPreset,
+  effectPass,
+  filmPass,
+  infraredPass,
+  powerShotPass,
+} from "powershot-threejs";
+
+const scenePass = pass(scene, camera);
+
+const powershot = new Pipeline(renderer);
+powershot.setMode("analog");
+powershot.setSize(width, height);
+applyPreset(powershot.ctx, PRESETS.powershot);
+
+const renderPipeline = new THREE.RenderPipeline(renderer);
+renderPipeline.outputNode = powerShotPass(scenePass, powershot);
+
+function animate() {
+  renderPipeline.render();
+}
+```
+
+All shipped effects can be used the same way:
+
+```js
+const film = new FilmPipeline(renderer);
+const infrared = new InfraredPipeline(renderer);
+
+renderPipeline.outputNode = filmPass(scenePass, film);
+renderPipeline.outputNode = infraredPass(scenePass, infrared);
+```
+
+Use `effectPass()` when you want the adapter to create or configure the effect lazily:
+
+```js
+renderPipeline.outputNode = effectPass(scenePass, {
+  createEffect: (renderer) => new Pipeline(renderer),
+  configureEffect: (effect) => {
+    effect.setMode("analog");
+    applyPreset(effect.ctx, PRESETS.powershot);
+  },
+  resolutionScale: 0.75,
+});
+```
+
+`powerShotPass()`, `filmPass()`, `infraredPass()`, and `effectPass()` accept any RenderPipeline-compatible output node, so existing node chains can be passed in place of `scenePass`. The adapter auto-sizes effects with `setSize(width, height)` by default; pass `{ autoSize: false }` if you manage effect resolution yourself.
 
 Useful controls:
 
@@ -97,6 +190,8 @@ Useful controls:
 - `src/main.js` - demo bootstrap, controls, image loading, and render loop.
 - `src/pipeline.js` - reusable realtime ISP stages and WebGPU render passes.
 - `src/film.js` - reusable motion-picture film emulation pipeline and stock presets.
+- `src/infrared.js` - reusable pseudo-NIR night-vision pipeline and presets.
+- `src/render-pipeline.js` - RenderPipeline output-node adapters for PowerShot effects.
 - `src/presets.js` - camera preset values.
 - `src/styles.css` - app UI styles.
 - `public/logo.png` - PowerSHOT logo.

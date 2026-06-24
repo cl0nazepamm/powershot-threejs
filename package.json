@@ -17,7 +17,9 @@
     ".": "./src/index.js",
     "./pipeline": "./src/pipeline.js",
     "./presets": "./src/presets.js",
-    "./film": "./src/film.js"
+    "./film": "./src/film.js",
+    "./infrared": "./src/infrared.js",
+    "./render-pipeline": "./src/render-pipeline.js"
   },
   "files": [
     "LICENSE",
@@ -25,13 +27,17 @@
     "src/index.js",
     "src/pipeline.js",
     "src/presets.js",
-    "src/film.js"
+    "src/film.js",
+    "src/infrared.js",
+    "src/render-pipeline.js"
   ],
   "keywords": [
     "threejs",
     "webgpu",
     "postprocessing",
     "isp",
+    "infrared",
+    "night-vision",
     "vhs",
     "ntsc"
   ],
@@ -39,7 +45,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "check": "node --check src/index.js && node --check src/main.js && node --check src/pipeline.js && node --check src/presets.js && node --check src/film.js"
+    "check": "node --check src/index.js && node --check src/main.js && node --check src/pipeline.js && node --check src/presets.js && node --check src/film.js && node --check src/infrared.js && node --check src/render-pipeline.js"
   },
   "devDependencies": {
     "three": "^0.184.0",

@@ -19,3 +19,23 @@ export {
   applyFilmPreset,
   makeFilmUniforms,
 } from "./film.js";
+
+export {
+  INFRARED_PRESET_KEYS,
+  INFRARED_PRESETS,
+  INFRARED_STAGE_DEFS,
+  InfraredPipeline,
+  applyInfraredPreset,
+  makeInfraredUniforms,
+} from "./infrared.js";
+
+export {
+  EffectPassNode,
+  FilmPassNode,
+  InfraredPassNode,
+  PowerShotPassNode,
+  effectPass,
+  filmPass,
+  infraredPass,
+  powerShotPass,
+} from "./render-pipeline.js";

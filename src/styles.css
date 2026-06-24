@@ -128,7 +128,8 @@ label {
 
 #digital-controls,
 #analog-controls,
-#film-controls {
+#film-controls,
+#infrared-controls {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -137,7 +138,8 @@ label {
 
 #digital-controls[hidden],
 #analog-controls[hidden],
-#film-controls[hidden] {
+#film-controls[hidden],
+#infrared-controls[hidden] {
   display: none;
 }
 
@@ -156,6 +158,7 @@ label {
 #digital-controls > div,
 #analog-controls > div,
 #film-controls > div,
+#infrared-controls > div,
 #stage-controls {
   min-width: 0;
 }
