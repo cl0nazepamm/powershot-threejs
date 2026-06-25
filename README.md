@@ -72,7 +72,7 @@ film.ctx.P.negativeView.value = 0; // set to 1 to inspect the negative
 film.renderTexture(inputTexture, frame);
 ```
 
-For green infrared / night-vision rendering, use `InfraredPipeline`. It has a dedicated pseudo-NIR signal path with local gain, broad phosphor bloom, pale highlight cores, monochrome sensor noise, tube vignette, and optional eye-mask gating. The default `ethereal_green` preset is tuned for a soft REC-like green night-vision look.
+For infrared / night-vision rendering, use `InfraredPipeline`. It has a dedicated pseudo-NIR signal path with local gain, broad intensifier halo, pale highlight cores, dark-biased scintillation, tube vignette, and optional eye-mask gating. The built-in preset is tuned around a P45-style white phosphor tube rather than a flat color grade.
 
 ```js
 import * as THREE from "three/webgpu";
@@ -88,7 +88,7 @@ await renderer.init();
 const infrared = new InfraredPipeline(renderer);
 infrared.setSize(width, height);
 infrared.setInputMode("rgb"); // "rgb" simulates NIR from RGB, "nir" treats the source as mono/real NIR
-applyInfraredPreset(infrared.ctx, INFRARED_PRESETS.ethereal_green);
+applyInfraredPreset(infrared.ctx, INFRARED_PRESETS.white_phosphor);
 
 // Optional aligned mask texture for eye/retinal flare regions.
 infrared.setEyeMask(maskTexture);

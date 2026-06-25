@@ -3,7 +3,7 @@ import * as THREE from "three/webgpu";
 import {
   Pipeline, PRESETS, PRESET_KEYS, STAGE_DEFS, applyPreset,
   FilmPipeline, FILM_PRESETS, FILM_PRESET_KEYS, applyFilmPreset,
-  InfraredPipeline, INFRARED_PRESETS, INFRARED_PRESET_KEYS, applyInfraredPreset,
+  InfraredPipeline, INFRARED_PRESETS, applyInfraredPreset,
 } from "./index.js";
 
 const MAX_WORK = 1600; // cap working resolution for snappy realtime
@@ -46,7 +46,6 @@ const els = {
   filmflicker: document.getElementById("filmflicker"),
   filmflickerval: document.getElementById("filmflickerval"),
   filmnegview: document.getElementById("filmnegview"),
-  infraredpreset: document.getElementById("infraredpreset"),
   infraredexposure: document.getElementById("infraredexposure"),
   infraredexposureval: document.getElementById("infraredexposureval"),
   infraredresponse: document.getElementById("infraredresponse"),
@@ -177,7 +176,6 @@ async function init() {
 
   buildPresetUI();
   buildFilmPresetUI();
-  buildInfraredPresetUI();
   buildStageUI();
   wireInput();
 
@@ -218,23 +216,6 @@ function buildFilmPresetUI() {
     filmPresetKey = els.filmpreset.value;
     applyFilmPreset(filmPipeline.ctx, FILM_PRESETS[filmPresetKey]);
     syncEffectUI();
-  });
-}
-
-function buildInfraredPresetUI() {
-  for (const key of INFRARED_PRESET_KEYS) {
-    const opt = document.createElement("option");
-    opt.value = key;
-    opt.textContent = `${key} — ${INFRARED_PRESETS[key].name}`;
-    els.infraredpreset.appendChild(opt);
-  }
-  els.infraredpreset.value = infraredPresetKey;
-  els.infraredpreset.addEventListener("change", () => {
-    infraredPresetKey = els.infraredpreset.value;
-    applyInfraredPreset(infraredPipeline.ctx, INFRARED_PRESETS[infraredPresetKey]);
-    infraredPipeline.clearHistory();
-    syncEffectUI();
-    resizeForSource();
   });
 }
 
@@ -602,7 +583,6 @@ function syncEffectUI() {
   setSlider(els.filmweave, els.filmweaveval, FP.weave.value);
   setSlider(els.filmflicker, els.filmflickerval, FP.flicker.value);
 
-  els.infraredpreset.value = infraredPresetKey;
   const IP = infraredPipeline.ctx.P;
   setSlider(els.infraredexposure, els.infraredexposureval, IP.exposure.value);
   setSlider(els.infraredresponse, els.infraredresponseval, IP.nirInput.value);

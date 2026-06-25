@@ -8,8 +8,7 @@
 // It works in a single scalar "electron-flux" channel L in scene-linear 0..1+,
 // packs adaptation / halo / eye-glow sources into one quarter-resolution
 // analysis target, then develops the final phosphor image in one full-resolution
-// pass. The primary look is a high-end white-phosphor tube; ethereal_green is the
-// same model with a green phosphor.
+// pass. The shipped look is a high-end white-phosphor tube.
 
 import * as THREE from "three/webgpu";
 import {
@@ -62,9 +61,11 @@ function nirFromLinear(lin, ctx) {
   const P = ctx.P;
   const broad = dot(lin, P.spectralMix);
   const redExcess = max(lin.r.sub(lin.g.add(lin.b).mul(0.5)), 0.0);
-  const vegExcess = max(lin.g.sub(max(lin.r, lin.b)), 0.0);
-  const skin = max(min(lin.r, lin.g).sub(lin.b), 0.0);
-  const skyMask = lin.b.sub(max(lin.r, lin.g)).clamp(0.0, 1.0);
+  const greenDominance = max(lin.g.sub(lin.r.mul(0.58).add(lin.b.mul(0.42))), 0.0);
+  const vegExcess = greenDominance.mul(smoothstep(0.035, 0.55, lin.g));
+  const skin = max(min(lin.r.mul(0.95), lin.g).sub(lin.b.mul(0.72)), 0.0);
+  const skyMask = smoothstep(0.02, 0.38, lin.b.sub(max(lin.r, lin.g).mul(0.86)));
+  const waterMask = smoothstep(0.02, 0.34, min(lin.g, lin.b).sub(lin.r.mul(1.12)));
 
   let sim = broad
     .add(redExcess.mul(P.redReflectance))
@@ -72,9 +73,11 @@ function nirFromLinear(lin, ctx) {
     .add(skin.mul(P.skinBoost));
   sim = sim
     .mul(float(1.0).sub(P.skySuppress.mul(skyMask)))
+    .mul(float(1.0).sub(P.waterSuppress.mul(waterMask)))
     .sub(lin.b.mul(P.blueSuppression));
 
   const mono = dot(lin, LUM709);
+  sim = sim.max(0.0).pow(P.photocathodeGamma);
   return mix(sim, mono, P.nirInput).max(0.0).mul(exp2u(P.exposure));
 }
 
@@ -93,23 +96,28 @@ function softNir(srcTex, ctx, uv) {
   const oy = vec2(0.0, ctx.texel.y.mul(s));
   const wC = 0.4;
   const wN = 0.15;
-  const lin = srgbToLinear(texture(srcTex, uv).rgb).mul(wC)
-    .add(srgbToLinear(texture(srcTex, uv.add(ox)).rgb).mul(wN))
-    .add(srgbToLinear(texture(srcTex, uv.sub(ox)).rgb).mul(wN))
-    .add(srgbToLinear(texture(srcTex, uv.add(oy)).rgb).mul(wN))
-    .add(srgbToLinear(texture(srcTex, uv.sub(oy)).rgb).mul(wN));
-  return nirFromLinear(lin, ctx);
+  return pseudoNirValue(srcTex, ctx, uv).mul(wC)
+    .add(pseudoNirValue(srcTex, ctx, uv.add(ox)).mul(wN))
+    .add(pseudoNirValue(srcTex, ctx, uv.sub(ox)).mul(wN))
+    .add(pseudoNirValue(srcTex, ctx, uv.add(oy)).mul(wN))
+    .add(pseudoNirValue(srcTex, ctx, uv.sub(oy)).mul(wN));
 }
 
 // --- Stage 11: phosphor screen --------------------------------------------
 // One intensity-invariant chroma multiply; only the brightest blooming cores
 // desaturate toward white (eye/sensor clip). White phosphor is a cool
-// near-neutral, NOT pure (1,1,1); green is yellow-green, NOT pure (0,1,0).
+// near-neutral, NOT pure (1,1,1).
 function phosphorMap(L, ctx) {
   const P = ctx.P;
-  const base = P.phosphorChroma.mul(L);
-  const white = P.highlightWhite.mul(min(L, float(1.0)));
-  const s = smoothstep(P.bloomStart, P.bloomStart.add(P.bloomRange), L);
+  let screen = L.sub(P.screenBlack).max(0.0);
+  screen = screen.mul(P.screenGain);
+  screen = screen.div(screen.add(P.screenShoulder)).mul(P.screenShoulder.add(1.0));
+  screen = screen.max(0.0).pow(P.phosphorGamma);
+
+  const base = P.phosphorChroma.mul(screen);
+  const white = P.highlightWhite.mul(min(screen, float(1.0)));
+  const s = smoothstep(P.bloomStart, P.bloomStart.add(P.bloomRange), screen)
+    .mul(P.highlightDesat);
   return mix(base, white, s);
 }
 
@@ -143,8 +151,9 @@ function hexGain(ctx, uv, L) {
 function sparkleAt(cell, fphase, L, ctx) {
   const P = ctx.P;
   const u = hash13(vec3(cell.x, cell.y, fphase.add(11.0)));
+  const darkness = float(1.0).sub(smoothstep(0.025, 0.58, L));
   const dens = P.scintDensity.mul(
-    float(1.0).add(P.scintDarkBoost.mul(smoothstep(0.5, 0.0, L))),
+    float(1.0).add(P.scintDarkBoost.mul(darkness)),
   );
   const fire = step(float(1.0).sub(dens), u); // only the top `dens` fraction fire
   const v = hash13(vec3(cell.x.add(7.0), cell.y.add(3.0), fphase.add(23.0)));
@@ -166,7 +175,7 @@ function scintillation(L, ctx) {
   // Sparse sparkle with a STATELESS phosphor "boil": because each frame's field
   // is a pure function of (cell, frame), we recompute the two previous frames and
   // combine with a decaying max() - each flash turns on sharply then fades over a
-  // couple of frames (P43/P45 ~1 ms afterglow), so the field boils rather than
+  // couple of frames (P45 ~1 ms afterglow), so the field boils rather than
   // blinks like TV snow. Needs no history buffer, and freezes correctly when the
   // frame uniform is held constant.
   const s0 = sparkleAt(cell, f, L, ctx);
@@ -307,7 +316,9 @@ export function makeInfraredUniforms() {
       greenReflectance: uniform(0.65),
       blueSuppression: uniform(0.10),
       skySuppress: uniform(0.45),
+      waterSuppress: uniform(0.35),
       skinBoost: uniform(0.12),
+      photocathodeGamma: uniform(0.88),
 
       // tube self-glow floor
       ebi: uniform(0.0045),
@@ -361,6 +372,11 @@ export function makeInfraredUniforms() {
       // phosphor screen
       phosphorChroma: uniform(new THREE.Vector3(0.92, 0.96, 1.00)),
       highlightWhite: uniform(new THREE.Vector3(1.00, 1.00, 1.00)),
+      screenBlack: uniform(0.004),
+      screenGain: uniform(1.08),
+      screenShoulder: uniform(0.92),
+      phosphorGamma: uniform(0.94),
+      highlightDesat: uniform(0.55),
       bloomStart: uniform(0.75),
       bloomRange: uniform(0.55),
 
@@ -376,108 +392,63 @@ export function makeInfraredUniforms() {
 
 export const INFRARED_PRESETS = {
   white_phosphor: {
-    name: "White Phosphor",
+    name: "P45 White Phosphor",
     sensor_resolution: [1280, 960],
-    exposure: 1.0,
+    exposure: 0.85,
     nir_input: 0.0,
-    spectral_mix: [0.50, 0.40, 0.10],
-    red_reflectance: 0.25,
-    green_reflectance: 0.65,
-    blue_suppression: 0.10,
-    sky_suppress: 0.45,
-    skin_boost: 0.12,
-    ebi: 0.0045,
+    spectral_mix: [0.58, 0.34, 0.08],
+    red_reflectance: 0.24,
+    green_reflectance: 0.92,
+    blue_suppression: 0.16,
+    sky_suppress: 0.66,
+    water_suppress: 0.52,
+    skin_boost: 0.17,
+    photocathode_gamma: 0.86,
+    ebi: 0.0065,
     middle_grey: 0.18,
-    local_gain: 0.32,
-    min_gain: 0.70,
-    max_gain: 3.0,
-    gain: 3.4,
-    max_output: 1.05,
-    glow_threshold: 0.60,
-    glow_softness: 0.22,
-    glow_strength: 0.45,
-    glow_radius: 1.45,
-    eye_strength: 0.90,
-    eye_threshold: 0.30,
-    eye_softness: 0.12,
+    local_gain: 0.46,
+    min_gain: 0.58,
+    max_gain: 4.2,
+    gain: 3.9,
+    max_output: 0.98,
+    glow_threshold: 0.44,
+    glow_softness: 0.24,
+    glow_strength: 0.34,
+    glow_radius: 1.90,
+    eye_strength: 0.78,
+    eye_threshold: 0.28,
+    eye_softness: 0.14,
     eye_local_ratio: 1.15,
-    eye_core_strength: 0.56,
-    eye_halo_strength: 0.50,
-    masked_eye_core: 0.90,
-    masked_eye_halo: 0.80,
-    psf_sigma: 0.75,
-    chicken_amp: 0.02,
-    chicken_freq: 38.0,
-    chicken_line: 0.06,
-    chicken_gate_lo: 0.45,
-    chicken_gate_hi: 0.85,
-    noise_amount: 0.70,
-    scint_grain: 1.15,
-    scint_density: 0.055,
-    scint_gain: 0.55,
-    scint_sharp: 3.2,
-    scint_dark_boost: 1.8,
-    shot_strength: 0.035,
-    scint_floor: 0.5,
-    phosphor_chroma: [0.92, 0.96, 1.00],
-    highlight_white: [1.00, 1.00, 1.00],
-    bloom_start: 0.75,
-    bloom_range: 0.55,
-    vignette: 0.30,
-    hotspot: 0.10,
-    persistence: 0.32,
-  },
-  ethereal_green: {
-    name: "Ethereal Green",
-    sensor_resolution: [1280, 960],
-    exposure: 1.2,
-    nir_input: 0.0,
-    spectral_mix: [0.50, 0.40, 0.10],
-    red_reflectance: 0.28,
-    green_reflectance: 0.80,
-    blue_suppression: 0.12,
-    sky_suppress: 0.50,
-    skin_boost: 0.14,
-    ebi: 0.006,
-    middle_grey: 0.18,
-    local_gain: 0.40,
-    min_gain: 0.72,
-    max_gain: 3.8,
-    gain: 3.8,
-    max_output: 1.05,
-    glow_threshold: 0.50,
-    glow_softness: 0.26,
-    glow_strength: 0.62,
-    glow_radius: 1.70,
-    eye_strength: 1.15,
-    eye_threshold: 0.24,
-    eye_softness: 0.15,
-    eye_local_ratio: 1.10,
-    eye_core_strength: 0.66,
-    eye_halo_strength: 0.72,
-    masked_eye_core: 0.98,
-    masked_eye_halo: 0.95,
-    psf_sigma: 1.10,
-    chicken_amp: 0.05,
-    chicken_freq: 32.0,
-    chicken_line: 0.07,
-    chicken_gate_lo: 0.40,
-    chicken_gate_hi: 0.80,
-    noise_amount: 1.0,
-    scint_grain: 1.35,
-    scint_density: 0.075,
-    scint_gain: 0.62,
-    scint_sharp: 2.8,
-    scint_dark_boost: 2.0,
-    shot_strength: 0.060,
-    scint_floor: 0.6,
-    phosphor_chroma: [0.12, 1.00, 0.02],
-    highlight_white: [1.00, 1.00, 1.00],
-    bloom_start: 0.70,
-    bloom_range: 0.60,
-    vignette: 0.45,
-    hotspot: 0.12,
-    persistence: 0.35,
+    eye_core_strength: 0.50,
+    eye_halo_strength: 0.44,
+    masked_eye_core: 0.82,
+    masked_eye_halo: 0.68,
+    psf_sigma: 0.92,
+    chicken_amp: 0.012,
+    chicken_freq: 44.0,
+    chicken_line: 0.045,
+    chicken_gate_lo: 0.54,
+    chicken_gate_hi: 0.92,
+    noise_amount: 0.48,
+    scint_grain: 1.05,
+    scint_density: 0.018,
+    scint_gain: 0.74,
+    scint_sharp: 4.2,
+    scint_dark_boost: 4.0,
+    shot_strength: 0.026,
+    scint_floor: 0.72,
+    phosphor_chroma: [0.78, 0.86, 0.96],
+    highlight_white: [0.96, 0.98, 1.00],
+    screen_black: 0.006,
+    screen_gain: 1.12,
+    screen_shoulder: 0.86,
+    phosphor_gamma: 0.94,
+    highlight_desat: 0.46,
+    bloom_start: 0.64,
+    bloom_range: 0.58,
+    vignette: 0.26,
+    hotspot: 0.055,
+    persistence: 0.42,
   },
 };
 
@@ -492,7 +463,9 @@ export function applyInfraredPreset(ctx, preset) {
   P.greenReflectance.value = preset.green_reflectance;
   P.blueSuppression.value = preset.blue_suppression;
   P.skySuppress.value = preset.sky_suppress;
+  P.waterSuppress.value = preset.water_suppress ?? 0.35;
   P.skinBoost.value = preset.skin_boost;
+  P.photocathodeGamma.value = preset.photocathode_gamma ?? 0.88;
   P.ebi.value = preset.ebi;
   P.middleGrey.value = preset.middle_grey;
   P.localGain.value = preset.local_gain;
@@ -528,6 +501,11 @@ export function applyInfraredPreset(ctx, preset) {
   P.scintFloor.value = preset.scint_floor;
   P.phosphorChroma.value.set(...preset.phosphor_chroma);
   P.highlightWhite.value.set(...preset.highlight_white);
+  P.screenBlack.value = preset.screen_black ?? 0.004;
+  P.screenGain.value = preset.screen_gain ?? 1.08;
+  P.screenShoulder.value = preset.screen_shoulder ?? 0.92;
+  P.phosphorGamma.value = preset.phosphor_gamma ?? 0.94;
+  P.highlightDesat.value = preset.highlight_desat ?? 0.55;
   P.bloomStart.value = preset.bloom_start;
   P.bloomRange.value = preset.bloom_range;
   P.vignette.value = preset.vignette;
