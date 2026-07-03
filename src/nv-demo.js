@@ -20,6 +20,7 @@
 import * as THREE from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createSpectralTracer } from "../demo/spectral_tracer.js";
+import { createNirBand } from "../demo/nir_band.js";
 import {
   InfraredPipeline, INFRARED_PRESETS, applyInfraredPreset,
 } from "./infrared.js";
@@ -34,6 +35,10 @@ const MAX_PIXELS = 1280 * 800;
 let renderer, scene, camera, controls, tracer, infrared, fluxRT;
 let irLight, mode = "nv", irOn = true;
 let frame = 0, lastT = 0, statusLine = "";
+// realtime band-collapsed raster path (see demo/nir_band.js)
+let realtime = true, band = null;
+const nirMats = new Map();      // original material → monochrome NIR material
+const lightRestore = [];        // [{ light, color, intensity }]
 
 // bisect flags: ?mode=visible · ?tube=0 (raw flux, no intensifier) · ?trace=0
 // (no tracer; feed the tube a synthetic gradient instead)
@@ -174,6 +179,74 @@ function buildScene() {
   camera.add(irLight);
   irLight.target.position.set(0, 0, -10);
   camera.add(irLight.target);
+
+  // shadow maps only matter on the realtime raster path (the tracer shadows
+  // by tracing); the camera-mounted beam MUST be occluded or the trick dies
+  irLight.castShadow = true;
+  irLight.shadow.mapSize.set(1024, 1024);
+  irLight.shadow.camera.near = 0.2;
+  irLight.shadow.camera.far = 60;
+  irLight.shadow.bias = -0.0004;
+  irLight.shadow.normalBias = 0.02;
+  scene.traverse((o) => {
+    if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
+    if (o.isSpotLight && o !== irLight) {
+      o.castShadow = true;
+      o.shadow.mapSize.set(512, 512);
+      o.shadow.bias = -0.0004;
+      o.shadow.normalBias = 0.02;
+    }
+  });
+}
+
+// ── realtime NIR band raster ─────────────────────────────────────────
+// Swap every material for its collapsed monochrome twin and every light for a
+// white light at its collapsed NIR flux, raster into the flux RT with shadow
+// maps, restore. Direct term matches the tracer's NEE analytically; indirect
+// bounces are the accuracy traded for framerate — the tube re-noises either
+// way, so the horror-game loop stays authentic.
+function nirMaterialFor(m) {
+  let nm = nirMats.get(m);
+  if (!nm) {
+    const r = band.reflectance(m);
+    const e = band.emissiveFlux(m);
+    nm = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(r, r, r),
+      roughness: Number.isFinite(m.roughness) ? m.roughness : 1,
+      metalness: Number.isFinite(m.metalness) ? m.metalness : 0,
+    });
+    nm.emissive.setRGB(e, e, e);
+    nirMats.set(m, nm);
+  }
+  return nm;
+}
+
+function renderNirRealtime() {
+  const swaps = [];
+  scene.traverse((o) => {
+    if (o.isMesh) { swaps.push([o, o.material]); o.material = nirMaterialFor(o.material); }
+  });
+  lightRestore.length = 0;
+  scene.traverse((o) => {
+    if (!o.isLight || o.isAmbientLight || o.isHemisphereLight) return;
+    lightRestore.push({ light: o, color: o.color.clone(), intensity: o.intensity });
+    const flux = band.lightFlux(o); // integrals are cheap; live-tracks toggles
+    o.color.setRGB(1, 1, 1);
+    o.intensity = flux;
+  });
+
+  const prevTarget = renderer.getRenderTarget?.() ?? null;
+  const prevTM = renderer.toneMapping;
+  try {
+    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.setRenderTarget(fluxRT);
+    renderer.render(scene, camera);
+  } finally {
+    renderer.setRenderTarget(prevTarget);
+    renderer.toneMapping = prevTM;
+    for (const [o, m] of swaps) o.material = m;
+    for (const r of lightRestore) { r.light.color.copy(r.color); r.light.intensity = r.intensity; }
+  }
 }
 
 function sizeFor() {
@@ -205,12 +278,16 @@ function setMode(next) {
 
 function hudText() {
   const P = infrared.ctx.P;
+  const rt = mode === "nv" && realtime;
   return [
     "TRUE-NIR NIGHT VISION — spectral tracer → Gen-3 intensifier",
     `mode        ${mode === "nv" ? "NV (photocathode flux λ550–900)" : "VISIBLE (XYZ λ380–720)"}   [V]`,
+    mode === "nv"
+      ? `render      ${rt ? "REALTIME — band-collapsed raster + shadow maps" : "PATH TRACED — 1 spp progressive"}   [R]`
+      : "",
     `IR illum    ${irOn ? "ON — 850 nm, black in RGB" : "OFF"}   [I]`,
     `tube exp    ${P.exposure.value.toFixed(2)} stops   [ / ]`,
-    `samples     ${tracer.getSampleCount()}`,
+    rt ? "" : `samples     ${tracer.getSampleCount()}`,
     statusLine ? `status      ${statusLine}` : "",
     "",
     "same-green hedge vs painted fence = metamer pair",
@@ -222,8 +299,11 @@ async function init() {
   renderer = new THREE.WebGPURenderer({ canvas, antialias: false });
   renderer.toneMapping = THREE.NoToneMapping;
   renderer.toneMappingExposure = 1.0;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   await renderer.init();
 
+  band = createNirBand();
   buildScene();
 
   infrared = new InfraredPipeline(renderer);
@@ -235,7 +315,9 @@ async function init() {
     type: THREE.HalfFloatType,
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
-    depthBuffer: false,
+    // the realtime path rasters real geometry into this target — it needs a
+    // z-buffer (the tracer's fullscreen blit ignores it: depthTest false)
+    depthBuffer: true,
     colorSpace: THREE.NoColorSpace,
   });
 
@@ -262,10 +344,11 @@ async function init() {
 
   window.addEventListener("keydown", (e) => {
     if (e.key === "v" || e.key === "V") setMode(mode === "nv" ? "visible" : "nv");
+    if (e.key === "r" || e.key === "R") realtime = !realtime;
     if (e.key === "i" || e.key === "I") {
       irOn = !irOn;
       irLight.intensity = irOn ? 70 : 0;
-      tracer.markSceneDirty();
+      tracer.markSceneDirty(); // raster path picks the change up live
     }
     if (e.key === "[") infrared.ctx.P.exposure.value -= 0.25;
     if (e.key === "]") infrared.ctx.P.exposure.value += 0.25;
@@ -277,9 +360,16 @@ async function init() {
     controls.update();
     frame += 1;
 
-    const drew = USE_TRACER ? tracer.render() : true;
-    if (mode === "nv" && drew && USE_TUBE) {
-      infrared.renderTexture(fluxRT.texture, frame, { dt });
+    if (mode === "nv" && realtime) {
+      // realtime path: raster the collapsed NIR band, tube on top. The
+      // camera-mounted IR beam follows the rig with no rebake, no reset.
+      renderNirRealtime();
+      if (USE_TUBE) infrared.renderTexture(fluxRT.texture, frame, { dt });
+    } else {
+      const drew = USE_TRACER ? tracer.render() : true;
+      if (mode === "nv" && drew && USE_TUBE) {
+        infrared.renderTexture(fluxRT.texture, frame, { dt });
+      }
     }
     if ((frame & 7) === 0) hud.textContent = hudText();
   });
