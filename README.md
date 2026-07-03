@@ -93,7 +93,7 @@ applyInfraredPreset(infrared.ctx, INFRARED_PRESETS.white_phosphor);
 // Optional aligned mask texture for eye/retinal flare regions.
 infrared.setEyeMask(maskTexture);
 
-infrared.renderTexture(inputTexture, frame);
+infrared.renderTexture(inputTexture, frame, { dt: deltaSeconds });
 ```
 
 Useful infrared controls:
@@ -101,12 +101,19 @@ Useful infrared controls:
 - `infrared.ctx.power.value` - blends between source and infrared render.
 - `infrared.ctx.P.exposure.value` - input amplification in stops.
 - `infrared.ctx.P.localGain.value` - dark-region adaptation strength.
-- `infrared.ctx.P.glowStrength.value` - broad green bloom amount.
+- `infrared.ctx.P.abcAttack.value` / `abcRecover` - temporal auto-brightness time constants (seconds); the whole image dims fast when a bright light enters frame and recovers slower after it leaves. Pass real `dt` into `renderTexture` for correct breathing.
+- `infrared.ctx.P.glowStrength.value` - broad intensifier halo amount.
+- `infrared.ctx.P.glowSaturate.value` - halo source clip; brighter sources saturate the halo core instead of growing its radius.
 - `infrared.ctx.P.eyeStrength.value` - compact highlight / eye flare amount.
 - `infrared.ctx.P.noiseAmount.value` - master monochrome sensor and phosphor noise.
-- `infrared.setInputMode("nir")` - use when the input is already monochrome or actual NIR.
+- `infrared.setInputMode("nir")` - the source is true linear photocathode flux in the red channel (e.g. a spectral renderer's NIR output); read raw, no decode, no RGB heuristic. Calibrate with `infrared.ctx.P.fluxScale.value` and start from the `white_phosphor_nir` preset.
+- `infrared.setInputEncoding("linear")` - the "rgb" source is a linear HDR render target rather than sRGB-encoded (avoids a double decode).
+- `infrared.setOutputEncoding("linear")` - emit linear output for a post stack that encodes at its own output stage.
+- `infrared.setHaloDisc(true)` - flat disc halo profile instead of a gaussian.
 
 RGB images do not contain actual infrared reflectance. The default path is an artistic pseudo-NIR approximation; pass real monochrome/NIR input and call `setInputMode("nir")` when you have real IR source material.
+
+The pipeline is internally sized for a tube-resolution look (~1280x960); larger canvases automatically scale the scintillation grain so sparkles stay ~one resolution element.
 
 For a normal Three.js scene, render your scene into a `THREE.RenderTarget`, then pass `target.texture` to `renderTexture()`:
 

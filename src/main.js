@@ -140,6 +140,7 @@ let recorder = null;
 let recChunks = [];
 let recLoopWas = false;
 let frame = 0;
+let lastTickAt = 0;
 let mode = "analog";
 let presetKey = "cybershot";
 let filmPresetKey = FILM_PRESET_KEYS[0];
@@ -853,6 +854,9 @@ async function tick() {
   if (!source || busy) return;
   busy = true;
   if (!freezeNoise) frame += 1;
+  const tickNow = performance.now();
+  const dt = lastTickAt > 0 ? (tickNow - lastTickAt) / 1000 : 1 / 60;
+  lastTickAt = tickNow;
 
   // re-upload the current video frame while it plays (or once after a seek)
   if (source.userData.isVideo && currentVideo && currentVideo.readyState >= 2) {
@@ -868,7 +872,7 @@ async function tick() {
 
   try {
     if (mode === "film") await filmPipeline.render(frame);
-    else if (mode === "infrared") await infraredPipeline.render(frame);
+    else if (mode === "infrared") await infraredPipeline.render(frame, { dt });
     else await pipeline.render(frame);
   } catch (err) {
     setStatus("render error:\n" + (err?.message || err));

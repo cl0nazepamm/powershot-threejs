@@ -3,12 +3,16 @@
 // This is a separate imaging path from the visible-light digital ISP. It models
 // a modern Gen-3 image-intensifier tube: a GaAs photocathode (red/NIR-weighted
 // spectral response), an MCP gain stage with a constant-output transfer curve,
-// resolution-limited optics, sparse photon scintillation, and a phosphor screen.
+// a real temporal auto-brightness-control loop, resolution-limited optics,
+// sparse photon scintillation, and a phosphor screen.
 //
-// It works in a single scalar "electron-flux" channel L in scene-linear 0..1+,
-// packs adaptation / halo / eye-glow sources into one quarter-resolution
-// analysis target, then develops the final phosphor image in one full-resolution
-// pass. The shipped look is a high-end white-phosphor tube.
+// It works in a single scalar "electron-flux" channel L in scene-linear 0..1+.
+// The flux is resolved ONCE per frame into a full-resolution single-channel
+// prepass target (either simulated from RGB, or read directly from a true-NIR
+// render such as a spectral tracer's photocathode-flux output). Everything
+// downstream - PSF, adaptation analysis, halo, ABC, develop - reads that
+// target, so the source is decoded in exactly one place. The shipped look is
+// a high-end white-phosphor tube.
 
 import * as THREE from "three/webgpu";
 import {
@@ -19,6 +23,11 @@ import {
 
 const LUM709 = vec3(0.2126, 0.7152, 0.0722);
 const TAU = 6.2831853;
+const GOLDEN_ANGLE = 2.39996323;
+// Native resolution class of a Gen-3 tube's usable output (~1280x960 fibre
+// bundle). Sparkle grain is specified at this scale and multiplied up for
+// larger canvases so setSize(3840, 2160) doesn't yield 1-px sparkles.
+const TUBE_REFERENCE_MIN_DIM = 960;
 
 function exp2u(x) {
   return exp(x.mul(Math.LN2));
@@ -53,10 +62,15 @@ function gaussTemporal(p, t, salt) {
 }
 
 // --- Stage 1: GaAs photocathode spectral response -------------------------
-// Fake the NIR-weighted response of a Gen-3 photocathode from an sRGB frame
+// Fake the NIR-weighted response of a Gen-3 photocathode from an RGB frame
 // (which carries no real NIR): rising red>green>blue quantum efficiency, a
 // chlorophyll "Wood effect" foliage glow, a waxy skin lift, and suppression of
 // blue sky / open water toward black. Returns the scalar electron flux.
+//
+// This is the raster FALLBACK. When a true photocathode-flux input is
+// available (a spectral tracer's NIR channel), use setInputMode("nir") and the
+// prepass reads the flux directly instead - RGB carries zero information about
+// NIR (metamerism), so no heuristic can recover it.
 function nirFromLinear(lin, ctx) {
   const P = ctx.P;
   const broad = dot(lin, P.spectralMix);
@@ -81,26 +95,44 @@ function nirFromLinear(lin, ctx) {
   return mix(sim, mono, P.nirInput).max(0.0).mul(exp2u(P.exposure));
 }
 
-function pseudoNirValue(srcTex, ctx, uv) {
-  return nirFromLinear(srgbToLinear(texture(srcTex, uv).rgb), ctx);
+// --- Stage 0: NIR prepass ---------------------------------------------------
+// Resolve the scalar electron flux once per frame into a full-res target.
+// Every later stage reads this texture, so input decode happens exactly here
+// (the spectral heuristic used to be re-evaluated ~7x per pixel: 5 PSF taps +
+// the sharp read + the analysis pass).
+function stNirPrepass(srcTex, ctx, { inputMode, inputEncoding }) {
+  const P = ctx.P;
+  if (inputMode === "nir") {
+    // True photocathode flux (e.g. a spectral tracer's NIR accumulation
+    // channel): a raw single-channel LINEAR read - no sRGB decode, no luma
+    // dot. fluxScale calibrates the renderer's flux range onto the range the
+    // tube presets were tuned for.
+    const flux = texture(srcTex, screenUV).r;
+    return vec4(flux.max(0.0).mul(P.fluxScale).mul(exp2u(P.exposure)), 0.0, 0.0, 1.0);
+  }
+  const raw = texture(srcTex, screenUV).rgb;
+  const lin = inputEncoding === "srgb" ? srgbToLinear(raw) : raw;
+  return vec4(nirFromLinear(lin, ctx), 0.0, 0.0, 1.0);
 }
 
 // --- Stage 7 (folded into read): resolution-limited PSF -------------------
 // A real tube is never razor-sharp (cascaded photocathode gap + MCP pore
-// sampling + phosphor grain + fibre-optic window). A small separable-ish
-// gaussian of the SOURCE keeps the signal soft so scintillation later sits as
-// crisp sparkle on a soft base - the cure for "generic grain".
-function softNir(srcTex, ctx, uv) {
-  const s = ctx.P.psfSigma;
-  const ox = vec2(ctx.texel.x.mul(s), 0.0);
-  const oy = vec2(0.0, ctx.texel.y.mul(s));
-  const wC = 0.4;
-  const wN = 0.15;
-  return pseudoNirValue(srcTex, ctx, uv).mul(wC)
-    .add(pseudoNirValue(srcTex, ctx, uv.add(ox)).mul(wN))
-    .add(pseudoNirValue(srcTex, ctx, uv.sub(ox)).mul(wN))
-    .add(pseudoNirValue(srcTex, ctx, uv.add(oy)).mul(wN))
-    .add(pseudoNirValue(srcTex, ctx, uv.sub(oy)).mul(wN));
+// sampling + phosphor grain + fibre-optic window). A small 3x3 gaussian of the
+// prepass keeps the signal soft so scintillation later sits as crisp sparkle
+// on a soft base - the cure for "generic grain". Full 9-tap kernel (the old
+// 5-tap plus kernel passed diagonals unblurred - a faint cross artifact).
+function softNir(nirTex, ctx, uv) {
+  const o = ctx.texel.mul(ctx.P.psfSigma);
+  let sum = float(0.0);
+  const w = [1, 2, 1, 2, 4, 2, 1, 2, 1];
+  let k = 0;
+  for (let j = -1; j <= 1; j += 1) {
+    for (let i = -1; i <= 1; i += 1) {
+      sum = sum.add(texture(nirTex, uv.add(o.mul(vec2(i, j)))).r.mul(w[k] / 16));
+      k += 1;
+    }
+  }
+  return sum;
 }
 
 // --- Stage 11: phosphor screen --------------------------------------------
@@ -158,13 +190,20 @@ function sparkleAt(cell, fphase, L, ctx) {
   const fire = step(float(1.0).sub(dens), u); // only the top `dens` fraction fire
   const v = hash13(vec3(cell.x.add(7.0), cell.y.add(3.0), fphase.add(23.0)));
   const amp = v.pow(P.scintSharp).mul(P.scintGain); // pow -> rare bright pops, not uniform
-  const ride = P.ebi.mul(P.scintFloor).add(sqrt(L.add(1e-4)).mul(0.5));
+  // Each event is ONE photoelectron through the full MCP gain: its amplitude
+  // is independent of the local signal (constant), riding just above the EBI
+  // floor. The sqrt(signal) behaviour belongs to the continuous `shot` fizz,
+  // not here - the old sqrt(L) term dimmed events exactly where they should
+  // dominate (dark regions). Density alone carries the dark/bright asymmetry.
+  const ride = float(1.0).add(P.ebi.mul(P.scintFloor));
   return fire.mul(amp).mul(ride);
 }
 
 function scintillation(L, ctx) {
   const P = ctx.P;
-  const grain = max(P.scintGrain, float(0.5));
+  // scintGrain is specified in TUBE pixels (~1280x960); grainScale (derived in
+  // setSize) keeps sparkles ~one resolution element on larger canvases.
+  const grain = max(P.scintGrain.mul(ctx.grainScale), float(0.5));
   const cell = floor(screenUV.mul(ctx.resolution).div(grain));
   const f = ctx.frame;
 
@@ -193,19 +232,28 @@ function infraredOutputAlpha(sourceSample, effectColor) {
   return sourceAlpha.add(effectAlpha.mul(sourceAlpha.oneMinus())).clamp(0.0, 1.0);
 }
 
-function stAnalysis(srcTex, ctx, eyeMaskTex) {
-  const nir = pseudoNirValue(srcTex, ctx, screenUV);
+function stAnalysis(nirTex, ctx, eyeMaskTex) {
+  const nir = texture(nirTex, screenUV).r;
   const glowMask = smoothstep(
     ctx.P.glowThreshold,
     ctx.P.glowThreshold.add(ctx.P.glowSoftness),
     nir,
   );
-  const glowSource = nir.mul(glowMask);
+  // Saturate BEFORE the blur: a real halo is charge spreading across the
+  // photocathode-MCP gap - a fixed angular disc whose CORE saturates as the
+  // source brightens. An unclamped source makes the blurred halo grow with
+  // brightness instead, and true-NIR inputs (unclamped Planck-tail sources)
+  // would nuke the whole frame.
+  const glowSource = min(nir.mul(glowMask), ctx.P.glowSaturate);
   const mask = eyeMaskTex ? texture(eyeMaskTex, screenUV).r.clamp(0.0, 1.0) : float(0.0);
   return vec4(nir, glowSource, glowSource.mul(mask), 1.0);
 }
 
-function stAnalysisBlur(tex, ctx, dx, dy) {
+// Two-pass analysis blur. The adaptation mean (r) always uses the separable
+// gaussian. The glow channels (g, b) optionally use a 13-tap Vogel-disc kernel
+// per pass (rotated differently each pass) - a flatter, more disc-like halo
+// profile than a gaussian, closer to the fixed angular spread of a real tube.
+function stAnalysisBlur(tex, ctx, dx, dy, disc) {
   const sigma = 2.55;
   let sum = vec3(0.0);
   let wsum = 0.0;
@@ -215,40 +263,90 @@ function stAnalysisBlur(tex, ctx, dx, dy) {
     sum = sum.add(texture(tex, screenUV.add(off)).rgb.mul(w));
     wsum += w;
   }
-  return vec4(sum.div(wsum), 1.0);
+  const gauss = sum.div(wsum);
+  if (!disc) return vec4(gauss, 1.0);
+
+  const rot = dy === 0 ? 0.0 : GOLDEN_ANGLE * 0.5; // decorrelate the two passes
+  let glow = vec2(0.0);
+  const taps = 13;
+  for (let i = 0; i < taps; i += 1) {
+    const r = Math.sqrt((i + 0.5) / taps) * 6.0; // match the gaussian footprint (+/-6 taps)
+    const ang = i * GOLDEN_ANGLE + rot;
+    const off = ctx.analysisTexel
+      .mul(vec2(Math.cos(ang) * r, Math.sin(ang) * r))
+      .mul(ctx.P.glowRadius);
+    glow = glow.add(texture(tex, screenUV.add(off)).gb.mul(1 / taps));
+  }
+  return vec4(gauss.r, glow.x, glow.y, 1.0);
 }
 
-function stDevelop(srcTex, ctx, analysisTex, eyeMaskTex, stages) {
+// --- Stage 3b: temporal ABC (gain breathing) --------------------------------
+// A real tube's auto-brightness control is a feedback loop with real time
+// constants: sweep a light into frame and the whole image dims over
+// ~100-200 ms, then recovers over ~300-500 ms after it leaves (tubes dim
+// faster than they recover). State is one float in a 1x1 ping-pong target:
+//   gain <- lerp(gainPrev, middleGrey / mean, 1 - exp(-dt / tau))
+// The mean is taken from a sparse grid of the quarter-res analysis target,
+// which holds the PRE-gain signal - reading the post-gain image instead would
+// close the loop on itself and oscillate.
+function stAbcUpdate(analysisTex, gainPrevTex, ctx) {
+  const P = ctx.P;
+  let sum = float(0.0);
+  const grid = 8;
+  for (let j = 0; j < grid; j += 1) {
+    for (let i = 0; i < grid; i += 1) {
+      sum = sum.add(texture(analysisTex, vec2((i + 0.5) / grid, (j + 0.5) / grid)).r);
+    }
+  }
+  const mean = sum.mul(1.0 / (grid * grid)).max(1e-4);
+  const target = P.middleGrey.div(mean).clamp(P.abcMin, P.abcMax);
+  const prev = texture(gainPrevTex, vec2(0.5, 0.5)).r;
+  // dimming (target below current gain) uses the fast attack constant
+  const tau = mix(P.abcRecover, P.abcAttack, step(target, prev)).max(1e-3);
+  const k = float(1.0).sub(exp(ctx.dt.negate().div(tau)));
+  return vec4(mix(prev, target, k), 0.0, 0.0, 1.0);
+}
+
+function stDevelop(srcTex, nirTex, ctx, analysisTex, abcGainTex, eyeMaskTex, stages, outputEncoding) {
   const P = ctx.P;
   const sourceSample = texture(srcTex, screenUV);
-  const nirSharp = pseudoNirValue(srcTex, ctx, screenUV); // sharp, for eye local contrast
+  const nirSharp = texture(nirTex, screenUV).r; // sharp, for eye local contrast
   const analysis = analysisTex ? texture(analysisTex, screenUV).rgb : vec3(nirSharp, 0.0, 0.0);
 
   // 1+7: photocathode signal, resolution-limited (soft).
-  let signal = softNir(srcTex, ctx, screenUV);
+  let signal = softNir(nirTex, ctx, screenUV);
 
-  // 2: EBI self-glow floor - lifts blacks into a faint glowing grey so noise has
-  // something to ride on (what you see with the lens cap on).
-  signal = signal.add(P.ebi);
-
-  // 3: local adaptation / ABC - huge gain that auto-dims bright regions and lifts
-  // shadows toward a constant output, from the quarter-res blurred local mean.
+  // 3: adaptation - local shading (same-frame tone mapping of the blurred local
+  // mean, reduced) x global ABC breathing (temporal loop, 1x1 state target).
+  // Both together match footage: local keeps detail near hot sources, global
+  // makes the whole image breathe when the scene brightness changes.
+  // Applied to the SCENE signal only - the EBI floor is injected after, so a
+  // pitch-black frame (true night, no sources) can't be gained into grey fog:
+  // the tube's self-glow is independent of scene-driven adaptation.
   if (stages.adaptation) {
     const local = max(analysis.r, float(1e-4));
     const adaptiveGain = P.middleGrey
       .div(local)
       .pow(P.localGain)
       .clamp(P.minGain, P.maxGain);
-    signal = signal.mul(adaptiveGain);
+    const abcGain = abcGainTex ? texture(abcGainTex, vec2(0.5, 0.5)).r : float(1.0);
+    signal = signal.mul(adaptiveGain).mul(abcGain);
   }
 
+  // 2: EBI self-glow floor - lifts blacks into a faint glowing grey so noise has
+  // something to ride on (what you see with the lens cap on). Post-adaptation,
+  // pre-MCP: it still rides the MCP gain, as in a real tube.
+  signal = signal.add(P.ebi);
+
   // 4: MCP gain + Naka-Rushton transfer - constant-gain region, saturation knee,
-  // and a hard ABC ceiling (maxOutput). The phosphor is linear, so no extra gamma.
+  // and a hard ceiling (maxOutput). The phosphor is linear, so no extra gamma.
   const x = signal.mul(P.gain);
   signal = x.div(x.div(P.maxOutput).add(1.0));
 
   // 5: halo / bloom - bright sources bloom into a fixed angular disc (charge
-  // spreading across the photocathode-MCP gap), constant in screen space.
+  // spreading across the photocathode-MCP gap), constant in screen space. The
+  // source is saturated pre-blur (stAnalysis), so doubling a light's intensity
+  // past glowSaturate drives the halo core toward clip without growing its radius.
   if (stages.glow) {
     signal = signal.add(analysis.g.mul(P.glowStrength));
   }
@@ -293,8 +391,14 @@ function stDevelop(srcTex, ctx, analysisTex, eyeMaskTex, stages) {
     signal = signal.mul(vignette).add(hotspot);
   }
 
-  // 11: phosphor colour map.
+  // 11: phosphor colour map. sRGB encode only for display-referred handoff; a
+  // linear output feeds a post stack that encodes at its own output stage.
   const phosphor = phosphorMap(signal.clamp(0.0, 1.35), ctx);
+  if (outputEncoding === "linear") {
+    const effectColor = phosphor.max(0.0);
+    const finalColor = mix(sourceSample.rgb, effectColor, ctx.power).max(0.0);
+    return vec4(finalColor, infraredOutputAlpha(sourceSample, finalColor));
+  }
   const effectColor = linearToSrgb(phosphor).clamp(0.0, 1.0);
   const finalColor = mix(sourceSample.rgb, effectColor, ctx.power).clamp(0.0, 1.0);
   return vec4(finalColor, infraredOutputAlpha(sourceSample, finalColor));
@@ -306,11 +410,18 @@ export function makeInfraredUniforms() {
     texel: uniform(new THREE.Vector2(1, 1)),
     analysisTexel: uniform(new THREE.Vector2(1, 1)),
     frame: uniform(0),
+    // frame delta in seconds, clamped by renderTexture (tab-switch spikes
+    // would otherwise snap the ABC loop).
+    dt: uniform(1 / 60),
+    // internal canvas-size multiplier for the sparkle grain (see setSize)
+    grainScale: uniform(1),
     power: uniform(1),
     P: {
       // photocathode spectral response
       exposure: uniform(1.0),
       nirInput: uniform(0.0),
+      // true-NIR flux calibration (setInputMode("nir") path only)
+      fluxScale: uniform(1.0),
       spectralMix: uniform(new THREE.Vector3(0.50, 0.40, 0.10)),
       redReflectance: uniform(0.25),
       greenReflectance: uniform(0.65),
@@ -323,11 +434,17 @@ export function makeInfraredUniforms() {
       // tube self-glow floor
       ebi: uniform(0.0045),
 
-      // local adaptation / ABC
+      // local adaptation
       middleGrey: uniform(0.18),
       localGain: uniform(0.32),
       minGain: uniform(0.70),
       maxGain: uniform(3.0),
+
+      // temporal ABC (global gain breathing)
+      abcAttack: uniform(0.08),
+      abcRecover: uniform(0.35),
+      abcMin: uniform(0.45),
+      abcMax: uniform(2.6),
 
       // MCP gain + Naka-Rushton transfer
       gain: uniform(3.4),
@@ -338,6 +455,7 @@ export function makeInfraredUniforms() {
       glowSoftness: uniform(0.22),
       glowStrength: uniform(0.45),
       glowRadius: uniform(1.45),
+      glowSaturate: uniform(1.5),
 
       // eyeshine
       eyeStrength: uniform(0.90),
@@ -365,7 +483,7 @@ export function makeInfraredUniforms() {
       scintDensity: uniform(0.055),
       scintGain: uniform(0.55),
       scintSharp: uniform(3.2),
-      scintDarkBoost: uniform(1.8),
+      scintDarkBoost: uniform(1.0),
       shotStrength: uniform(0.035),
       scintFloor: uniform(0.5),
 
@@ -406,15 +524,20 @@ export const INFRARED_PRESETS = {
     photocathode_gamma: 0.86,
     ebi: 0.0065,
     middle_grey: 0.18,
-    local_gain: 0.46,
+    local_gain: 0.34,
     min_gain: 0.58,
     max_gain: 4.2,
+    abc_attack: 0.08,
+    abc_recover: 0.35,
+    abc_min: 0.45,
+    abc_max: 2.6,
     gain: 3.9,
     max_output: 0.98,
     glow_threshold: 0.44,
     glow_softness: 0.24,
     glow_strength: 0.34,
     glow_radius: 1.90,
+    glow_saturate: 1.5,
     eye_strength: 0.78,
     eye_threshold: 0.28,
     eye_softness: 0.14,
@@ -432,9 +555,81 @@ export const INFRARED_PRESETS = {
     noise_amount: 0.48,
     scint_grain: 1.05,
     scint_density: 0.018,
-    scint_gain: 0.74,
+    // constant-amplitude events: gain now IS the pop brightness (was scaled by
+    // ~sqrt(signal) before); density alone carries the dark/bright asymmetry.
+    scint_gain: 0.55,
     scint_sharp: 4.2,
-    scint_dark_boost: 4.0,
+    scint_dark_boost: 1.6,
+    shot_strength: 0.026,
+    scint_floor: 0.72,
+    phosphor_chroma: [0.78, 0.86, 0.96],
+    highlight_white: [0.96, 0.98, 1.00],
+    screen_black: 0.006,
+    screen_gain: 1.12,
+    screen_shoulder: 0.86,
+    phosphor_gamma: 0.94,
+    highlight_desat: 0.46,
+    bloom_start: 0.64,
+    bloom_range: 0.58,
+    vignette: 0.26,
+    hotspot: 0.055,
+    persistence: 0.42,
+  },
+  // Tuned for a TRUE photocathode-flux input (setInputMode("nir") fed by a
+  // spectral tracer's NIR channel): linear flux with far hotter dynamic range
+  // than the RGB heuristic - unclamped Planck-tail sources, unlit night ground
+  // around 0.02-0.05 flux. The RGB-heuristic spectral controls are inert on
+  // this path. Expect to trim flux_scale / gain against your renderer's units.
+  white_phosphor_nir: {
+    name: "P45 White Phosphor (true NIR)",
+    sensor_resolution: [1280, 960],
+    exposure: 0.0,
+    nir_input: 1.0,
+    flux_scale: 1.0,
+    spectral_mix: [0.58, 0.34, 0.08],
+    red_reflectance: 0.24,
+    green_reflectance: 0.92,
+    blue_suppression: 0.16,
+    sky_suppress: 0.66,
+    water_suppress: 0.52,
+    skin_boost: 0.17,
+    photocathode_gamma: 1.0,
+    ebi: 0.0065,
+    middle_grey: 0.18,
+    local_gain: 0.30,
+    min_gain: 0.58,
+    max_gain: 5.0,
+    abc_attack: 0.08,
+    abc_recover: 0.35,
+    abc_min: 0.45,
+    abc_max: 3.4,
+    gain: 6.5,
+    max_output: 0.98,
+    glow_threshold: 0.30,
+    glow_softness: 0.24,
+    glow_strength: 0.34,
+    glow_radius: 1.90,
+    glow_saturate: 1.5,
+    eye_strength: 0.78,
+    eye_threshold: 0.28,
+    eye_softness: 0.14,
+    eye_local_ratio: 1.15,
+    eye_core_strength: 0.50,
+    eye_halo_strength: 0.44,
+    masked_eye_core: 0.82,
+    masked_eye_halo: 0.68,
+    psf_sigma: 0.92,
+    chicken_amp: 0.012,
+    chicken_freq: 44.0,
+    chicken_line: 0.045,
+    chicken_gate_lo: 0.54,
+    chicken_gate_hi: 0.92,
+    noise_amount: 0.48,
+    scint_grain: 1.05,
+    scint_density: 0.022,
+    scint_gain: 0.55,
+    scint_sharp: 4.2,
+    scint_dark_boost: 1.6,
     shot_strength: 0.026,
     scint_floor: 0.72,
     phosphor_chroma: [0.78, 0.86, 0.96],
@@ -458,6 +653,7 @@ export function applyInfraredPreset(ctx, preset) {
   const P = ctx.P;
   P.exposure.value = preset.exposure;
   P.nirInput.value = preset.nir_input;
+  P.fluxScale.value = preset.flux_scale ?? 1.0;
   P.spectralMix.value.set(...preset.spectral_mix);
   P.redReflectance.value = preset.red_reflectance;
   P.greenReflectance.value = preset.green_reflectance;
@@ -471,12 +667,17 @@ export function applyInfraredPreset(ctx, preset) {
   P.localGain.value = preset.local_gain;
   P.minGain.value = preset.min_gain;
   P.maxGain.value = preset.max_gain;
+  P.abcAttack.value = preset.abc_attack ?? 0.08;
+  P.abcRecover.value = preset.abc_recover ?? 0.35;
+  P.abcMin.value = preset.abc_min ?? 0.45;
+  P.abcMax.value = preset.abc_max ?? 2.6;
   P.gain.value = preset.gain;
   P.maxOutput.value = preset.max_output;
   P.glowThreshold.value = preset.glow_threshold;
   P.glowSoftness.value = preset.glow_softness;
   P.glowStrength.value = preset.glow_strength;
   P.glowRadius.value = preset.glow_radius;
+  P.glowSaturate.value = preset.glow_saturate ?? 1.5;
   P.eyeStrength.value = preset.eye_strength;
   P.eyeThreshold.value = preset.eye_threshold;
   P.eyeSoftness.value = preset.eye_softness;
@@ -533,8 +734,22 @@ export class InfraredPipeline {
       depthBuffer: false,
       colorSpace: THREE.NoColorSpace,
     };
+    // full-res single-channel electron-flux prepass
+    this.rtNir = new THREE.RenderTarget(1, 1, { ...opts, format: THREE.RedFormat });
     this.rtAnalysisA = new THREE.RenderTarget(1, 1, opts);
     this.rtAnalysisB = new THREE.RenderTarget(1, 1, { ...opts });
+    // 1x1 ABC gain state (ping-pong: update A->B, copy B->A). Nearest filter:
+    // r16f state, no interpolation wanted.
+    const gainOpts = {
+      type: THREE.HalfFloatType,
+      format: THREE.RedFormat,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      depthBuffer: false,
+      colorSpace: THREE.NoColorSpace,
+    };
+    this.rtGainA = new THREE.RenderTarget(1, 1, gainOpts);
+    this.rtGainB = new THREE.RenderTarget(1, 1, { ...gainOpts });
 
     this.quadScene = new THREE.Scene();
     this.quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -546,8 +761,16 @@ export class InfraredPipeline {
     this.source = null;
     this.eyeMask = null;
     this.size = { w: 0, h: 0 };
-    this.analysisSteps = [];
+    // "rgb": simulate NIR from an RGB frame. "nir": the source IS linear
+    // photocathode flux (single channel) - read raw, no decode, no heuristic.
+    this.inputMode = "rgb";
+    this.inputEncoding = "srgb";   // decode applied to "rgb" sources
+    this.outputEncoding = "srgb";  // "linear" for a handoff into a post stack
+    this.haloDisc = false;         // Vogel-disc halo profile (see stAnalysisBlur)
+    this.steps = [];
     this.developMat = null;
+    this.abcInitMat = null;
+    this.abcNeedsInit = true;
     this.dirty = true;
   }
 
@@ -571,18 +794,53 @@ export class InfraredPipeline {
     if (w === this.size.w && h === this.size.h) return;
     const aw = Math.max(1, Math.round(w / 4));
     const ah = Math.max(1, Math.round(h / 4));
+    this.rtNir.setSize(Math.max(1, w), Math.max(1, h));
     this.rtAnalysisA.setSize(aw, ah);
     this.rtAnalysisB.setSize(aw, ah);
     this.size = { w, h };
     this.ctx.resolution.value.set(w, h);
     this.ctx.texel.value.set(1 / w, 1 / h);
     this.ctx.analysisTexel.value.set(1 / aw, 1 / ah);
+    // sparkle grain is specified at tube resolution; scale it up with the canvas
+    this.ctx.grainScale.value = Math.max(1, Math.min(w, h) / TUBE_REFERENCE_MIN_DIM);
     this.clearHistory();
     this.dirty = true;
   }
 
+  // "rgb" (default): simulate NIR from RGB. "nir": treat the source as true
+  // linear photocathode flux (e.g. a spectral tracer's NIR channel).
   setInputMode(mode) {
-    this.ctx.P.nirInput.value = mode === "nir" ? 1 : 0;
+    const next = mode === "nir" ? "nir" : "rgb";
+    if (this.inputMode === next) return;
+    this.inputMode = next;
+    this.ctx.P.nirInput.value = next === "nir" ? 1 : 0;
+    this.dirty = true;
+  }
+
+  // Encoding of an "rgb" source: "srgb" (default - typical canvas/video input)
+  // or "linear" (an HDR render target - avoids a double decode).
+  setInputEncoding(mode) {
+    const next = mode === "linear" ? "linear" : "srgb";
+    if (this.inputEncoding === next) return;
+    this.inputEncoding = next;
+    this.dirty = true;
+  }
+
+  // "srgb" (default): display-referred output. "linear": hand off to a post
+  // stack that does its own output encode (avoids a double encode).
+  setOutputEncoding(mode) {
+    const next = mode === "linear" ? "linear" : "srgb";
+    if (this.outputEncoding === next) return;
+    this.outputEncoding = next;
+    this.dirty = true;
+  }
+
+  // Flat Vogel-disc halo profile instead of the separable gaussian.
+  setHaloDisc(on) {
+    const next = on === true;
+    if (this.haloDisc === next) return;
+    this.haloDisc = next;
+    this.dirty = true;
   }
 
   setEyeMask(textureObject) {
@@ -603,8 +861,9 @@ export class InfraredPipeline {
   }
 
   clearHistory() {
-    // The phosphor "boil" is stateless (it recomputes prior frames analytically),
-    // so the intensifier path keeps no history target.
+    // The phosphor "boil" is stateless (it recomputes prior frames
+    // analytically); the only history is the ABC gain state, reset to 1.0.
+    this.abcNeedsInit = true;
   }
 
   setEnabled(id, on) {
@@ -616,9 +875,9 @@ export class InfraredPipeline {
   }
 
   _rebuild() {
-    for (const s of this.analysisSteps) s.material.dispose();
+    for (const s of this.steps) s.material.dispose();
     if (this.developMat) this.developMat.dispose();
-    this.analysisSteps = [];
+    this.steps = [];
     this.developMat = null;
     this.dirty = false;
     if (!this.source) return;
@@ -632,45 +891,87 @@ export class InfraredPipeline {
     };
     const needsAnalysis = stages.adaptation || stages.glow || stages.eyes;
 
+    if (!this.abcInitMat) {
+      this.abcInitMat = this._mat(vec4(1.0, 0.0, 0.0, 1.0));
+    }
+
+    // Stage 0: resolve electron flux once into the full-res prepass target.
+    this.steps.push({
+      material: this._mat(stNirPrepass(this.source, this.ctx, {
+        inputMode: this.inputMode,
+        inputEncoding: this.inputEncoding,
+      })),
+      target: this.rtNir,
+    });
+
     if (needsAnalysis) {
-      this.analysisSteps.push({
-        material: this._mat(stAnalysis(this.source, this.ctx, this.eyeMask)),
+      this.steps.push({
+        material: this._mat(stAnalysis(this.rtNir.texture, this.ctx, this.eyeMask)),
         target: this.rtAnalysisA,
       });
-      this.analysisSteps.push({
-        material: this._mat(stAnalysisBlur(this.rtAnalysisA.texture, this.ctx, 1, 0)),
+      this.steps.push({
+        material: this._mat(stAnalysisBlur(this.rtAnalysisA.texture, this.ctx, 1, 0, this.haloDisc)),
         target: this.rtAnalysisB,
       });
-      this.analysisSteps.push({
-        material: this._mat(stAnalysisBlur(this.rtAnalysisB.texture, this.ctx, 0, 1)),
+      this.steps.push({
+        material: this._mat(stAnalysisBlur(this.rtAnalysisB.texture, this.ctx, 0, 1, this.haloDisc)),
         target: this.rtAnalysisA,
+      });
+    }
+
+    if (stages.adaptation) {
+      // ABC loop: update reads (analysis mean, gain A) -> writes gain B, then
+      // B is copied back to A so the develop pass always reads A.
+      this.steps.push({
+        material: this._mat(stAbcUpdate(
+          needsAnalysis ? this.rtAnalysisA.texture : this.rtNir.texture,
+          this.rtGainA.texture,
+          this.ctx,
+        )),
+        target: this.rtGainB,
+      });
+      this.steps.push({
+        material: this._mat(vec4(texture(this.rtGainB.texture, vec2(0.5, 0.5)).r, 0.0, 0.0, 1.0)),
+        target: this.rtGainA,
       });
     }
 
     this.developMat = this._mat(
       stDevelop(
         this.source,
+        this.rtNir.texture,
         this.ctx,
         needsAnalysis ? this.rtAnalysisA.texture : null,
+        stages.adaptation ? this.rtGainA.texture : null,
         this.eyeMask,
         stages,
+        this.outputEncoding,
       ),
     );
     this.developMat.transparent = true;
     this.developMat.blending = THREE.NoBlending;
   }
 
-  renderTexture(inputTexture, frame = 0, { outputTarget = null } = {}) {
+  renderTexture(inputTexture, frame = 0, { outputTarget = null, dt = 1 / 60 } = {}) {
     if (!inputTexture) return false;
     this.setSource(inputTexture);
     if (this.dirty) this._rebuild();
     if (!this.source || !this.developMat) return false;
     this.ctx.frame.value = frame;
+    this.ctx.dt.value = Math.min(Math.max(Number.isFinite(dt) ? dt : 1 / 60, 0), 0.1);
     const r = this.renderer;
     const previousTarget = r.getRenderTarget?.() ?? null;
 
     try {
-      for (const step of this.analysisSteps) {
+      if (this.abcNeedsInit && this.abcInitMat) {
+        this.mesh.material = this.abcInitMat;
+        r.setRenderTarget(this.rtGainA);
+        r.render(this.quadScene, this.quadCam);
+        r.setRenderTarget(this.rtGainB);
+        r.render(this.quadScene, this.quadCam);
+        this.abcNeedsInit = false;
+      }
+      for (const step of this.steps) {
         this.mesh.material = step.material;
         r.setRenderTarget(step.target);
         r.render(this.quadScene, this.quadCam);
@@ -684,17 +985,22 @@ export class InfraredPipeline {
     }
   }
 
-  async render(frame) {
-    this.renderTexture(this.source, frame);
+  async render(frame, options = {}) {
+    this.renderTexture(this.source, frame, options);
   }
 
   dispose() {
-    for (const s of this.analysisSteps) s.material.dispose();
-    this.analysisSteps = [];
+    for (const s of this.steps) s.material.dispose();
+    this.steps = [];
     if (this.developMat) this.developMat.dispose();
     this.developMat = null;
+    if (this.abcInitMat) this.abcInitMat.dispose();
+    this.abcInitMat = null;
+    this.rtNir.dispose();
     this.rtAnalysisA.dispose();
     this.rtAnalysisB.dispose();
+    this.rtGainA.dispose();
+    this.rtGainB.dispose();
     this.mesh.geometry.dispose();
   }
 }

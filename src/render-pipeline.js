@@ -231,6 +231,7 @@ export class EffectPassNode extends THREE.Node {
         ? this.frameProvider(frame, this)
         : frame.frameId ?? this.frame;
       const rendered = effect.renderTexture(sourceTexture, pipelineFrame, {
+        dt: Number.isFinite(frame?.deltaTime) ? frame.deltaTime : undefined,
         ...defaultRenderOptions(this.renderOptions, frame, this, effect),
         outputTarget: this.outputTarget,
       });
