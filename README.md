@@ -106,7 +106,7 @@ Useful infrared controls:
 - `infrared.ctx.P.glowSaturate.value` - halo source clip; brighter sources saturate the halo core instead of growing its radius.
 - `infrared.ctx.P.eyeStrength.value` - compact highlight / eye flare amount.
 - `infrared.ctx.P.noiseAmount.value` - master monochrome sensor and phosphor noise.
-- `infrared.setInputMode("nir")` - the source is true linear photocathode flux in the red channel (e.g. a spectral renderer's NIR output); read raw, no decode, no RGB heuristic. Calibrate with `infrared.ctx.P.fluxScale.value` and start from the `white_phosphor_nir` preset.
+- `infrared.setInputMode("nir")` - the source is true linear photocathode flux in the red channel (e.g. a spectral renderer's NIR output); read raw, no decode, no RGB heuristic. Calibrate with `infrared.ctx.P.fluxScale.value` and start from the `white_phosphor_nir` preset. The input contract: a single-channel LINEAR electron-flux texture (no tone mapping, no sRGB encode), scaled so unlit night ground lands around 0.02–0.05.
 - `infrared.setInputEncoding("linear")` - the "rgb" source is a linear HDR render target rather than sRGB-encoded (avoids a double decode).
 - `infrared.setOutputEncoding("linear")` - emit linear output for a post stack that encodes at its own output stage.
 - `infrared.setHaloDisc(true)` - flat disc halo profile instead of a gaussian.
