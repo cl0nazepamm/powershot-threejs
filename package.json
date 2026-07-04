@@ -1,6 +1,6 @@
 {
   "name": "powershot-threejs",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Authentic digital camera ISP and analog signal post-processing for Three.js WebGPU.",
   "license": "MIT",
   "homepage": "https://cl0nazepamm.github.io/powershot-threejs/",
