@@ -8,7 +8,7 @@ import {
 
 const MAX_WORK = 1600; // cap working resolution for snappy realtime
 const ANALOG_WORK = [720, 540];
-const DEFAULT_IMAGE = `${import.meta.env.BASE_URL}six_chart.png`;
+const DEFAULT_IMAGE = `${import.meta.env.BASE_URL}vibe%20coding.jpg`;
 
 const els = {
   canvas: document.getElementById("view"),
@@ -145,7 +145,7 @@ let recChunks = [];
 let recLoopWas = false;
 let frame = 0;
 let lastTickAt = 0;
-let mode = "film";
+let mode = "analog";
 let presetKey = "cybershot";
 let filmPresetKey = FILM_PRESET_KEYS[0];
 let infraredPresetKey = "white_phosphor";

@@ -250,25 +250,36 @@ function stDevelop(srcTex, ctx, haloTex, inputEncoding) {
   let out = tPrint.mul(ctx.P.displayGain);
   out = filmMatrix(out, ctx.P.p2dR, ctx.P.p2dG, ctx.P.p2dB);
 
-  // hue restoration (the notorious-six edge fix): the per-channel H&D curves
-  // rotate hue as they climb (orange->yellow, azure->cyan). For midtones that
-  // skew IS the stock's character, so we keep it — we only rein in the
-  // EXAGGERATED skew on near-primary / near-Notorious-Six colours. Rescale the
-  // post-burn scene colour to the developed luminance (carries hue, no exposure
-  // change), then blend it back weighted by how close the developed colour sits
-  // to a gamut edge (its purity). Neutrals and gentle midtones keep full film
-  // character; only the pure-primary edges get pulled toward the scene. Blown
-  // highlights are already white in hueRef, so the burn survives. hueRestore
-  // 0 = raw film skew everywhere; 1 = full scene hue on the pure edges.
-  // Exact-inverse gamut inset/outset can't do this — it cancels itself.
+  // hue restoration (the notorious-six edge fix), done as a TRUE hue ROTATION:
+  // the per-channel H&D curves rotate hue as they climb (orange->yellow,
+  // azure->cyan). For midtones that skew IS the stock's character, so we keep
+  // it — we only rein in the EXAGGERATED skew on near-primary colours, gated by
+  // purity. The fix: keep the developed colour's luminance AND chroma magnitude
+  // (its saturation and rolloff — the film character) and turn ONLY the hue
+  // angle back toward the post-burn scene hue. A lerp toward the scene *colour*
+  // (the earlier version) also drags saturation, so it either did nothing or
+  // desaturated; rotating the chroma vector moves hue without touching purity.
+  // Blown highlights are already ~white in hueRef (no hue), so the burn stands.
   const hrLt = dot(out, LUM709);
-  const hrLr = dot(hueRef, LUM709).max(1e-5);
-  const hrRef = hueRef.mul(hrLt.div(hrLr));
   // purity: 0 = achromatic, ->1 on a gamut edge (channel spread over intensity)
   const hrChroma = max(max(out.x, out.y), out.z).sub(min(min(out.x, out.y), out.z));
   const hrPurity = hrChroma.div(hrLt.add(hrChroma).max(1e-5)).clamp(0.0, 1.0);
-  const hrW = ctx.P.hueRestore.mul(smoothstep(0.5, 1.0, hrPurity));
-  out = mix(out, hrRef, hrW.clamp(0.0, 1.0));
+  const hrW = ctx.P.hueRestore.mul(smoothstep(0.5, 1.0, hrPurity)).clamp(0.0, 1.0);
+  // split each colour into achromatic mean + chroma vector (in the plane
+  // perpendicular to grey); the chroma vector's DIRECTION is the hue, its
+  // LENGTH is the chroma. Rotate the developed direction toward the scene
+  // direction by hrW (nlerp — skews are small, so it tracks a true rotation),
+  // then rebuild with the developed mean + developed magnitude preserved.
+  const outMean = out.x.add(out.y).add(out.z).div(3.0);
+  const refMean = hueRef.x.add(hueRef.y).add(hueRef.z).div(3.0);
+  const outChroma = out.sub(outMean);
+  const refChroma = hueRef.sub(refMean);
+  const outMag = sqrt(dot(outChroma, outChroma)).max(1e-6);
+  const dirOut = outChroma.div(outMag);
+  const dirRef = refChroma.div(sqrt(dot(refChroma, refChroma)).max(1e-6));
+  const dirMix = mix(dirOut, dirRef, hrW);
+  const dirN = dirMix.div(sqrt(dot(dirMix, dirMix)).max(1e-6));
+  out = vec3(outMean).add(dirN.mul(outMag));
 
   const printView = linearToSrgb(out);
 
