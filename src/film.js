@@ -121,8 +121,12 @@ function weavedUV(ctx) {
 // scene, so the fitted film curves, mid-grey neutrality and grain/halation
 // calibration are untouched. Applied before the exposure gain so the
 // exposure slider stays "stops at the film plane".
-function sceneExposure(srcTex, ctx, uv) {
-  const lin = srgbToLinear(texture(srcTex, uv).rgb);
+function sceneExposure(srcTex, ctx, uv, inputEncoding = "srgb") {
+  const raw = texture(srcTex, uv).rgb;
+  // "srgb" (default): typical canvas/video input, decode to linear here.
+  // "linear": a scene-linear HDR render target — no decode (a double decode
+  // crushes shadows and shifts the whole H&D curve fit).
+  const lin = inputEncoding === "linear" ? raw.max(0.0) : srgbToLinear(raw);
   const flat = lin.div(0.18).max(1e-7).pow(ctx.P.inputGamma).mul(0.18);
   return flat.mul(exp2u(ctx.P.exposure));
 }
@@ -168,8 +172,8 @@ function filmOutputAlpha(sourceSample, effectColor) {
 
 // Pass 1 — halation source: scene-linear highlights above threshold, rendered
 // into the quarter-res target (the downsample IS the sampling).
-function stHaloExtract(srcTex, ctx) {
-  const lin = sceneExposure(srcTex, ctx, weavedUV(ctx));
+function stHaloExtract(srcTex, ctx, inputEncoding) {
+  const lin = sceneExposure(srcTex, ctx, weavedUV(ctx), inputEncoding);
   const lum = dot(lin, LUM709);
   const m = smoothstep(ctx.P.halThreshold, ctx.P.halThreshold.add(ctx.P.halSoftness), lum);
   return lin.mul(m);
@@ -190,9 +194,9 @@ function stHaloBlur(tex, ctx, dx, dy) {
 }
 
 // Pass 4 — the whole photochemical chain, fused.
-function stDevelop(srcTex, ctx, haloTex) {
+function stDevelop(srcTex, ctx, haloTex, inputEncoding) {
   const uv = weavedUV(ctx);
-  let E = sceneExposure(srcTex, ctx, uv);
+  let E = sceneExposure(srcTex, ctx, uv, inputEncoding);
 
   // halation: light that punched through the emulsion and bounced back off
   // the base re-exposes the layers (red-heavy), BEFORE the H&D response.
@@ -535,6 +539,7 @@ export class FilmPipeline {
 
     this.enabled = new Set(["halation", "develop"]);
     this.source = null;
+    this.inputEncoding = "srgb"; // see setInputEncoding
     this.size = { w: 0, h: 0 };
     this.haloSteps = []; // [{ material, target }]
     this.developMat = null;
@@ -548,6 +553,15 @@ export class FilmPipeline {
     m.depthWrite = false;
     m.toneMapped = false;
     return m;
+  }
+
+  // "srgb" (default): decode the source to linear at input. "linear": the
+  // source is already scene-linear (HDR render target) — no decode.
+  setInputEncoding(mode) {
+    const next = mode === "linear" ? "linear" : "srgb";
+    if (this.inputEncoding === next) return;
+    this.inputEncoding = next;
+    this.dirty = true;
   }
 
   setSource(tex) {
@@ -588,7 +602,7 @@ export class FilmPipeline {
     const halation = this.enabled.has("halation");
     if (halation) {
       this.haloSteps.push({
-        material: this._mat(stHaloExtract(this.source, this.ctx)),
+        material: this._mat(stHaloExtract(this.source, this.ctx, this.inputEncoding)),
         target: this.rtHaloA,
       });
       this.haloSteps.push({
@@ -602,7 +616,7 @@ export class FilmPipeline {
     }
 
     this.developMat = this._mat(
-      stDevelop(this.source, this.ctx, halation ? this.rtHaloA.texture : null),
+      stDevelop(this.source, this.ctx, halation ? this.rtHaloA.texture : null, this.inputEncoding),
     );
     this.developMat.transparent = false;
     this.developMat.blending = THREE.NoBlending;

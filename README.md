@@ -185,6 +185,7 @@ renderPipeline.outputNode = effectPass(scenePass, {
 Useful controls:
 
 - `powershot.ctx.power.value` - blends between source and effect.
+- `powershot.setInputEncoding("linear")` - the source is a scene-linear HDR render target: photographic exposure (`powershot.ctx.sceneExposure.value`, stops) and the camera OETF are applied at input, making the ISP the imager (feed it with the renderer's tone mapping OFF). `FilmPipeline` takes the same flag (skips the sRGB decode; its own `exposure` is already in stops).
 - `powershot.ctx.noiseScale.value` - global noise scale.
 - `powershot.ctx.P.jpegStrength.value` - digital JPEG amount.
 - `powershot.ctx.P.analogStrength.value` - analog/VHS amount.

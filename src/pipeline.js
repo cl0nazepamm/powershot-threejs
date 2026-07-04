@@ -15,7 +15,7 @@ import * as THREE from "three/webgpu";
 import {
   vec2, vec3, vec4, float, uniform, texture, screenUV,
   mix, clamp, max, min, dot, abs, floor, fract, sin, cos, sqrt, log, mod, step,
-  exp,
+  exp, pow,
 } from "three/tsl";
 
 const LEVELS = 255.0;
@@ -83,8 +83,32 @@ function bayerPhase(uvN, ctx) {
 
 // Stage 1 also handles the implicit downsample: sampling the (larger) source
 // image into the sensor-resolution target IS the downsample.
-function stInput(tex, ctx) {
-  return texture(tex, screenUV).rgb.mul(LEVELS);
+function exp2s(x) {
+  return exp(x.mul(Math.LN2));
+}
+
+// Camera OETF for scene-linear sources (exact sRGB encode). The ISP's code
+// value stages are calibrated against encoded input; a linear HDR render goes
+// through photographic exposure then this curve before entering the sensor
+// domain — the front end a real camera has between photons and code values.
+function cameraOetf(c) {
+  const v = c.clamp(0.0, 1.0);
+  const lo = v.mul(12.92);
+  const hi = pow(v, 1.0 / 2.4).mul(1.055).sub(0.055);
+  return mix(lo, hi, step(0.0031308, v));
+}
+
+// Source read shared by both input stages. "srgb" (default): the source is an
+// already-encoded image/video — pass through as before. "linear": a
+// scene-linear HDR render target — apply exposure (stops) + the OETF here.
+function inputRGB(tex, ctx, inputEncoding) {
+  const raw = texture(tex, screenUV).rgb;
+  if (inputEncoding !== "linear") return raw;
+  return cameraOetf(raw.max(0.0).mul(exp2s(ctx.sceneExposure)));
+}
+
+function stInput(tex, ctx, inputEncoding) {
+  return inputRGB(tex, ctx, inputEncoding).mul(LEVELS);
 }
 
 function stCopy(tex, ctx) {
@@ -486,8 +510,8 @@ function stDigitalPointStack(tex, ctx, ids) {
   return digitalPointStackColor(c, ctx, ids);
 }
 
-function stInputDigitalPointStack(tex, ctx, ids) {
-  let c = texture(tex, screenUV).rgb.mul(LEVELS);
+function stInputDigitalPointStack(tex, ctx, ids, inputEncoding) {
+  let c = inputRGB(tex, ctx, inputEncoding).mul(LEVELS);
   return digitalPointStackColor(c, ctx, ids);
 }
 
@@ -971,6 +995,9 @@ export function makeUniforms() {
     noiseScale: uniform(1.06),
     outputBrightness: uniform(0),
     outputContrast: uniform(0),
+    // photographic exposure in stops, applied to scene-LINEAR input only
+    // (setInputEncoding("linear")) before the camera OETF
+    sceneExposure: uniform(0),
     P: {
       barrel: uniform(0), ca: uniform(0),
       lensSoftness: uniform(0.25),
@@ -1118,9 +1145,19 @@ export class Pipeline {
     this.enabled = new Set(STAGE_DEFS.map((s) => s.id));
     this.mode = "digital";
     this.source = null;
+    // "srgb" (default): source is an encoded image/video. "linear": source is
+    // a scene-linear HDR render — exposure + camera OETF applied at input.
+    this.inputEncoding = "srgb";
     this.size = { w: 0, h: 0 };
     this.steps = [];       // [{ material, target }]
     this.outputMat = null; // draws final 0..255 texture to screen as 0..1
+    this.dirty = true;
+  }
+
+  setInputEncoding(mode) {
+    const next = mode === "linear" ? "linear" : "srgb";
+    if (this.inputEncoding === next) return;
+    this.inputEncoding = next;
     this.dirty = true;
   }
 
@@ -1228,12 +1265,12 @@ export class Pipeline {
       }
       read = stackDomain(ids) === "grey" ? this.rtGreyA : this.rtA;
       this.steps.push({
-        material: this._mat(stInputDigitalPointStack(this.source, this.ctx, new Set(ids))),
+        material: this._mat(stInputDigitalPointStack(this.source, this.ctx, new Set(ids), this.inputEncoding)),
         target: read,
       });
     } else {
       // mandatory input + downsample pass: 0..1 source -> 0..255 in rtA.
-      this.steps.push({ material: this._mat(stInput(this.source, this.ctx)), target: this.rtA });
+      this.steps.push({ material: this._mat(stInput(this.source, this.ctx, this.inputEncoding)), target: this.rtA });
     }
 
     // ping-pong the active stages with baked input textures
