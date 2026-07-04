@@ -215,9 +215,19 @@ export function createSpectralTracer({
         return new THREE.StorageBufferAttribute(array, 1);
     }
 
+    let sceneBuildInFlight = false;
     function rebuildScene() {
+        // buildSpectralScene is ASYNC (it time-slices PBR map extraction over
+        // rAF). Kick the build and keep presenting the previous scene (or a
+        // clear frame) until the new buffers swap in. Never treat the returned
+        // PROMISE as the built object: every field reads undefined, makeStorage
+        // gets undefined arrays, and the zero-size storage buffers cascade into
+        // "Invalid BindGroup bindGroup_object" on every compute submit.
+        if (sceneBuildInFlight) return hasSceneBuilt;
+        sceneBuildInFlight = true;
+        (async () => {
         try {
-            const built = buildSpectralScene({ THREE, scene, camera: activeCamera, maxTriangles: MAX_TRIANGLES });
+            const built = await buildSpectralScene({ THREE, scene, camera: activeCamera, maxTriangles: MAX_TRIANGLES });
             if (!built) {
                 // Empty scene — nothing to trace. Treat as built so we just clear.
                 disposeGPU();
@@ -225,13 +235,13 @@ export function createSpectralTracer({
                 sceneDirty = false;
                 sceneDirtyAt = 0;
                 lastCameraLayersMask = cameraLayersMask(activeCamera);
-                return true;
+                return;
             }
             if (built.error) {
                 onStatus(`max.js - Path tracer: ${built.error}`);
                 sceneDirty = false; // don't spin; surface the cap and stop
                 hasSceneBuilt = false;
-                return false;
+                return;
             }
 
             disposeGPU();
@@ -246,6 +256,10 @@ export function createSpectralTracer({
                 accum: makeStorage(new Float32Array(width * height * 4)),
                 lightCount: built.lightCount,
                 nodeCount: built.nodeCount,
+                // two-level BVH: instance table + TLAS live in the materials tail
+                tlasNodeCount: built.tlasNodeCount,
+                instBase: built.instBase,
+                tlasBase: built.tlasBase,
             };
             const kernels = buildKernels({
                 THREE, buffers, env: built.env,
@@ -268,14 +282,16 @@ export function createSpectralTracer({
             lastSceneRebuildAt = performance.now();
             nextRebuildRetryAt = 0;
             lastRebuildErrorKey = '';
-            return true;
         } catch (error) {
             sceneDirty = true;
             const key = error?.stack || error?.message || String(error);
             nextRebuildRetryAt = performance.now() + SCENE_REBUILD_RETRY_MS;
             if (key !== lastRebuildErrorKey) { lastRebuildErrorKey = key; onError(error); }
-            return false;
+        } finally {
+            sceneBuildInFlight = false;
         }
+        })();
+        return hasSceneBuilt;
     }
 
     function applyUniformSettings() {

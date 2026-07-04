@@ -113,6 +113,9 @@ export function buildKernels({
         hasEnv: uniform(env ? 1 : 0, 'uint'),
         lightCount: uniform(buffers.lightCount >>> 0, 'uint'),
         nodeCount: uniform(buffers.nodeCount >>> 0, 'uint'),
+        tlasNodeCount: uniform((buffers.tlasNodeCount ?? 0) >>> 0, 'uint'),
+        instBase: uniform((buffers.instBase ?? 0) >>> 0, 'uint'),
+        tlasBase: uniform((buffers.tlasBase ?? 0) >>> 0, 'uint'),
         exposure: uniform(1.0),
         // Thin-lens depth of field. apertureRadius 0 = pinhole (DOF off).
         apertureRadius: uniform(0.0),
@@ -137,7 +140,7 @@ export function buildKernels({
         fetchVert, fetchNorm, fetchUV, triVert, matFloat,
         srgbToLinear, sampleLayer,
         jhReflectance, jhEmission, emitterAtLambda, envAtLambda, cosineSample,
-        traverseClosest, traverseAny,
+        traverseClosest, traverseAny, instLocalRay, instNormalToWorld,
         haveAlbedoMap, haveNormalMap, haveRoughMap, haveMetalMap, haveEmissiveMap,
         albedoTex, normalTex, roughTex, metalTex, emissiveTex,
     } = trav;
@@ -235,7 +238,8 @@ export function buildKernels({
 
             const bestT = float(T_MAX).toVar();
             const bestTri = int(-1).toVar();
-            traverseClosest(ro, rd, bestT, bestTri);
+            const bestInst = int(-1).toVar();
+            traverseClosest(ro, rd, bestT, bestTri, bestInst);
 
             If(bestTri.lessThan(int(0)), () => {
                 radiance.addAssign(clampGI(throughput.mul(envAtLambda(rd, lambda))));
@@ -243,31 +247,39 @@ export function buildKernels({
             });
 
             const triId = uint(bestTri);
+            const instId = uint(bestInst);
             const matId = triMaterial.element(triId);
+            // Vertex data is LOCAL space (two-level BVH). Shade in the hit
+            // instance's local frame — dot(nLocal, lrd) ≡ dot(nWorld, rd) and
+            // barycentrics are affine-invariant, so every test below is exact —
+            // then transform the FINAL normals to world through (M⁻¹)ᵀ.
+            const Lray = instLocalRay(instId, ro, rd);
+            const lro = Lray.ro.toVar();
+            const lrd = Lray.rd.toVar();
             const vi0 = triVert(triId, 0);
             const vi1 = triVert(triId, 1);
             const vi2 = triVert(triId, 2);
             const p0 = fetchVert(vi0);
             const p1 = fetchVert(vi1);
             const p2 = fetchVert(vi2);
-            const ngRaw = normalize(cross(p1.sub(p0), p2.sub(p0)));
-            const entering = dot(ngRaw, rd).lessThan(float(0));         // front-face hit
-            const ng = ngRaw.mul(select(entering, float(1), float(-1))); // geometric, faces ray
+            const ngLocalRaw = normalize(cross(p1.sub(p0), p2.sub(p0)));
+            const entering = dot(ngLocalRaw, lrd).lessThan(float(0));         // front-face hit
+            const ngLocal = ngLocalRaw.mul(select(entering, float(1), float(-1))); // geometric, faces ray
 
             // Smooth shading normal: re-derive the hit barycentrics (Möller-
-            // Trumbore) and interpolate the per-vertex normals. Falls back to
-            // the geometric normal when no vertex normals were synced (length 0).
+            // Trumbore, LOCAL ray) and interpolate the per-vertex normals. Falls
+            // back to the geometric normal when no vertex normals were synced.
             const e1n = p1.sub(p0);
             const e2n = p2.sub(p0);
-            const pvn = cross(rd, e2n);
+            const pvn = cross(lrd, e2n);
             const invDetN = float(1).div(dot(e1n, pvn));
-            const tvn = ro.sub(p0);
+            const tvn = lro.sub(p0);
             const bU = dot(tvn, pvn).mul(invDetN);
-            const bV = dot(rd, cross(tvn, e1n)).mul(invDetN);
+            const bV = dot(lrd, cross(tvn, e1n)).mul(invDetN);
             const bW = float(1).sub(bU).sub(bV);
             const nInterp = bW.mul(fetchNorm(vi0)).add(bU.mul(fetchNorm(vi1))).add(bV.mul(fetchNorm(vi2)));
             const nLen = length(nInterp);
-            const Ns = select(nLen.greaterThan(float(0.01)), nInterp.div(max(nLen, float(1e-6))), ng).toVar();
+            const Ns = select(nLen.greaterThan(float(0.01)), nInterp.div(max(nLen, float(1e-6))), ngLocal).toVar();
 
             // Interpolated + transformed hit UV — shared by every map sample.
             const uvHit = fetchUV(vi0).mul(bW).add(fetchUV(vi1).mul(bU)).add(fetchUV(vi2).mul(bV));
@@ -297,7 +309,10 @@ export function buildKernels({
                 });
             }
             // keep the shading normal on the geometric side that faces the ray
-            Ns.assign(Ns.mul(select(dot(Ns, ng).lessThan(float(0)), float(-1), float(1))));
+            Ns.assign(Ns.mul(select(dot(Ns, ngLocal).lessThan(float(0)), float(-1), float(1))));
+            // local frame done — everything below shades in WORLD space
+            const ng = instNormalToWorld(instId, ngLocal);
+            Ns.assign(instNormalToWorld(instId, Ns));
 
             const hitPoint = ro.add(rd.mul(bestT));
             const hitPos = hitPoint.add(ng.mul(float(RAY_EPS)));        // +ng offset for NEE
