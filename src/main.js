@@ -8,7 +8,7 @@ import {
 
 const MAX_WORK = 1600; // cap working resolution for snappy realtime
 const ANALOG_WORK = [720, 540];
-const DEFAULT_IMAGE = `${import.meta.env.BASE_URL}vibe%20coding.jpg`;
+const DEFAULT_IMAGE = `${import.meta.env.BASE_URL}six_chart.png`;
 
 const els = {
   canvas: document.getElementById("view"),
@@ -31,6 +31,10 @@ const els = {
   filmgrainsizeval: document.getElementById("filmgrainsizeval"),
   filmgrainsat: document.getElementById("filmgrainsat"),
   filmgrainsatval: document.getElementById("filmgrainsatval"),
+  filmchroma: document.getElementById("filmchroma"),
+  filmchromaval: document.getElementById("filmchromaval"),
+  filmhue: document.getElementById("filmhue"),
+  filmhueval: document.getElementById("filmhueval"),
   filmhalation: document.getElementById("filmhalation"),
   filmhalationval: document.getElementById("filmhalationval"),
   filmhalthreshold: document.getElementById("filmhalthreshold"),
@@ -141,7 +145,7 @@ let recChunks = [];
 let recLoopWas = false;
 let frame = 0;
 let lastTickAt = 0;
-let mode = "analog";
+let mode = "film";
 let presetKey = "cybershot";
 let filmPresetKey = FILM_PRESET_KEYS[0];
 let infraredPresetKey = "white_phosphor";
@@ -383,6 +387,8 @@ function wireInput() {
   wireFilmSlider(els.filmgrain, els.filmgrainval, (v) => { FP().grainStrength.value = v; });
   wireFilmSlider(els.filmgrainsize, els.filmgrainsizeval, (v) => { FP().grainSize.value = v; });
   wireFilmSlider(els.filmgrainsat, els.filmgrainsatval, (v) => { FP().grainSaturation.value = v; });
+  wireFilmSlider(els.filmchroma, els.filmchromaval, (v) => { FP().highlightBurn.value = v; });
+  wireFilmSlider(els.filmhue, els.filmhueval, (v) => { FP().hueRestore.value = v; });
   wireFilmSlider(els.filmhalation, els.filmhalationval, (v) => { FP().halStrength.value = v; });
   wireFilmSlider(els.filmhalthreshold, els.filmhalthresholdval, (v) => { FP().halThreshold.value = v; });
   wireFilmSlider(els.filmhalradius, els.filmhalradiusval, (v) => { FP().halRadius.value = v; });
@@ -576,6 +582,8 @@ function syncEffectUI() {
   setSlider(els.filmgrain, els.filmgrainval, FP.grainStrength.value);
   setSlider(els.filmgrainsize, els.filmgrainsizeval, FP.grainSize.value);
   setSlider(els.filmgrainsat, els.filmgrainsatval, FP.grainSaturation.value);
+  setSlider(els.filmchroma, els.filmchromaval, FP.highlightBurn.value);
+  setSlider(els.filmhue, els.filmhueval, FP.hueRestore.value);
   setSlider(els.filmhalation, els.filmhalationval, FP.halStrength.value);
   setSlider(els.filmhalthreshold, els.filmhalthresholdval, FP.halThreshold.value);
   setSlider(els.filmhalradius, els.filmhalradiusval, FP.halRadius.value);
