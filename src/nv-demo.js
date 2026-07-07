@@ -1,6 +1,6 @@
 // True-NIR night-vision test scene.
 //
-// A spectral path tracer (vendored from maxjs, NV mode) renders a night yard
+// The speedball spectral path tracer (speedball-gi, NV mode) renders a night yard
 // at hero wavelengths λ ∈ [550, 900] nm importance-sampled against a Gen-3
 // GaAs photocathode. The resulting LINEAR electron flux feeds the PowerSHOT
 // image-intensifier model (setInputMode("nir")) — no RGB heuristic anywhere.
@@ -19,8 +19,8 @@
 
 import * as THREE from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { createSpectralTracer } from "../demo/spectral_tracer.js";
-import { createNirBand } from "../demo/nir_band.js";
+import { createSpectralTracer } from "speedball-gi/spectral-tracer";
+import { createNirBand } from "./nir_band.js";
 import {
   InfraredPipeline, INFRARED_PRESETS, applyInfraredPreset,
 } from "./infrared.js";
@@ -35,7 +35,7 @@ const MAX_PIXELS = 1280 * 800;
 let renderer, scene, camera, controls, tracer, infrared, fluxRT;
 let irLight, mode = "nv", irOn = true;
 let frame = 0, lastT = 0, statusLine = "";
-// realtime band-collapsed raster path (see demo/nir_band.js)
+// realtime band-collapsed raster path (see src/nir_band.js)
 let realtime = true, band = null;
 const nirMats = new Map();      // original material → monochrome NIR material
 const lightRestore = [];        // [{ light, color, intensity }]

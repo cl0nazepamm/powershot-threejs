@@ -18,9 +18,9 @@
 
 import {
   photocathodeResponseJS, NV_LAMBDA_MIN, NV_LAMBDA_MAX,
-} from "./spectral_traverse.js";
-import { classifyNir } from "./spectral_scene.js";
-import { decodeSpectralLut, SPECTRAL_LUT_RES } from "./srgb_lut.js";
+} from "speedball-gi/spectral-traverse";
+import { classifyNir } from "speedball-gi/spectral-scene";
+import { decodeSpectralLut, SPECTRAL_LUT_RES } from "speedball-gi/srgb-lut";
 
 const L0 = NV_LAMBDA_MIN;
 const L1 = NV_LAMBDA_MAX;

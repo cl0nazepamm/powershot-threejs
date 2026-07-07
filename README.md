@@ -200,6 +200,11 @@ Useful controls:
 - `src/film.js` - reusable motion-picture film emulation pipeline and stock presets.
 - `src/infrared.js` - reusable pseudo-NIR night-vision pipeline and presets.
 - `src/render-pipeline.js` - RenderPipeline output-node adapters for PowerShot effects.
+- `nv.html` + `src/nv-demo.js` - true-NIR night-vision demo: the speedball-gi
+  spectral tracer (NV mode) renders linear photocathode flux that feeds
+  `setInputMode("nir")` - no RGB heuristic anywhere.
+- `src/nir_band.js` - realtime band-collapsed raster twin of the tracer's
+  direct term (exact spectral integrals, zero Monte Carlo noise).
 - `src/presets.js` - camera preset values.
 - `src/styles.css` - app UI styles.
 - `public/logo.png` - PowerSHOT logo.
