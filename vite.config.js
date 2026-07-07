@@ -6,6 +6,8 @@ export default defineConfig({
   // One three (and one BVH) instance even when speedball-gi is npm-linked
   // from a sibling checkout — its bare imports must resolve to OUR deps.
   resolve: { dedupe: ["three", "three-mesh-bvh"] },
+  // Keep the sibling speedball checkout servable in dev when npm-linked.
+  server: { fs: { allow: [".", "../speedball"] } },
   build: {
     // Build BOTH pages — vite only builds index.html by default, which left
     // nv.html (the true-NIR demo) out of `npm run build` and its import checks.
