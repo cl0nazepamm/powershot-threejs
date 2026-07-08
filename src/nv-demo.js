@@ -15,7 +15,8 @@
 //     brightness: the Planck NIR tail makes the bulb dominate through the tube
 //   - a sodium street lamp (589 nm line) goes dim; water goes black; skin lifts
 //
-// Keys: V visible/NV · I toggle IR illuminator · [ ] tube exposure · drag orbit
+// Keys: V visible/NV · N tube/NightShot · I toggle IR illuminator · [ ] tube exposure
+//       NightShot: , . VHS strength · < > tape noise · ; ' CCD smear · drag orbit
 
 import * as THREE from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -24,6 +25,9 @@ import { createNirBand } from "./nir_band.js";
 import {
   InfraredPipeline, INFRARED_PRESETS, applyInfraredPreset,
 } from "./infrared.js";
+import {
+  NightshotPipeline, NIGHTSHOT_PRESETS, applyNightshotPreset,
+} from "./nightshot.js";
 
 const canvas = document.getElementById("canvas");
 const hud = document.getElementById("hud");
@@ -32,8 +36,10 @@ const hud = document.getElementById("hud");
 // intensifier is tuned around ~1280×960 anyway.
 const MAX_PIXELS = 1280 * 800;
 
-let renderer, scene, camera, controls, tracer, infrared, fluxRT;
+let renderer, scene, camera, controls, tracer, infrared, nightshot, fluxRT;
 let irLight, mode = "nv", irOn = true;
+// imaging device consuming the flux: Gen-3 tube or Sony NightShot camcorder
+let device = "tube";
 let frame = 0, lastT = 0, statusLine = "";
 // realtime band-collapsed raster path (see src/nir_band.js)
 let realtime = true, band = null;
@@ -265,6 +271,7 @@ function applySize() {
   camera.updateProjectionMatrix();
   if (fluxRT) fluxRT.setSize(w, h);
   infrared.setSize(w, h);
+  if (nightshot) nightshot.setSize(w, h);
   tracer.markSceneDirty(); // kernel dims are baked per build
 }
 
@@ -276,12 +283,22 @@ function setMode(next) {
   renderer.outputColorSpace = mode === "nv" ? THREE.LinearSRGBColorSpace : THREE.SRGBColorSpace;
 }
 
+function activeIrCtx() {
+  return device === "nightshot" ? nightshot.ir.ctx : infrared.ctx;
+}
+
 function hudText() {
-  const P = infrared.ctx.P;
+  const P = activeIrCtx().P;
   const rt = mode === "nv" && realtime;
   return [
     "TRUE-NIR NIGHT VISION — spectral tracer → Gen-3 intensifier",
     `mode        ${mode === "nv" ? "NV (photocathode flux λ550–900)" : "VISIBLE (XYZ λ380–720)"}   [V]`,
+    mode === "nv"
+      ? `device      ${device === "tube" ? "Gen-3 tube (white phosphor)" : "Sony NightShot (CCD + tape path)"}   [N]`
+      : "",
+    mode === "nv" && device === "nightshot"
+      ? `tape        VHS ${nightshot.cam.ctx.P.analogStrength.value.toFixed(2)} [, .] · noise ${nightshot.cam.ctx.P.analogTapeNoise.value.toFixed(2)} [< >] · smear ${nightshot.ctx.P.smear.value.toFixed(2)} [; ']`
+      : "",
     mode === "nv"
       ? `render      ${rt ? "REALTIME — band-collapsed raster + shadow maps" : "PATH TRACED — 1 spp progressive"}   [R]`
       : "",
@@ -310,6 +327,10 @@ async function init() {
   applyInfraredPreset(infrared.ctx, INFRARED_PRESETS.white_phosphor_nir);
   infrared.setInputMode("nir");
   infrared.setHaloDisc(true);
+
+  nightshot = new NightshotPipeline(renderer);
+  applyNightshotPreset(nightshot, NIGHTSHOT_PRESETS.nightshot_plus);
+  nightshot.ir.setInputMode("nir");
 
   fluxRT = new THREE.RenderTarget(1, 1, {
     type: THREE.HalfFloatType,
@@ -344,14 +365,24 @@ async function init() {
 
   window.addEventListener("keydown", (e) => {
     if (e.key === "v" || e.key === "V") setMode(mode === "nv" ? "visible" : "nv");
+    if (e.key === "n" || e.key === "N") device = device === "tube" ? "nightshot" : "tube";
     if (e.key === "r" || e.key === "R") realtime = !realtime;
     if (e.key === "i" || e.key === "I") {
       irOn = !irOn;
       irLight.intensity = irOn ? 70 : 0;
       tracer.markSceneDirty(); // raster path picks the change up live
     }
-    if (e.key === "[") infrared.ctx.P.exposure.value -= 0.25;
-    if (e.key === "]") infrared.ctx.P.exposure.value += 0.25;
+    if (e.key === "[") activeIrCtx().P.exposure.value -= 0.25;
+    if (e.key === "]") activeIrCtx().P.exposure.value += 0.25;
+    // NightShot tape-path trims
+    const clamp03 = (v) => Math.min(3, Math.max(0, v));
+    const A = nightshot.cam.ctx.P;
+    if (e.key === ",") A.analogStrength.value = clamp03(A.analogStrength.value - 0.1);
+    if (e.key === ".") A.analogStrength.value = clamp03(A.analogStrength.value + 0.1);
+    if (e.key === "<") A.analogTapeNoise.value = clamp03(A.analogTapeNoise.value - 0.1);
+    if (e.key === ">") A.analogTapeNoise.value = clamp03(A.analogTapeNoise.value + 0.1);
+    if (e.key === ";") nightshot.ctx.P.smear.value = Math.min(2, Math.max(0, nightshot.ctx.P.smear.value - 0.1));
+    if (e.key === "'") nightshot.ctx.P.smear.value = Math.min(2, Math.max(0, nightshot.ctx.P.smear.value + 0.1));
   });
 
   renderer.setAnimationLoop((t) => {
@@ -360,15 +391,16 @@ async function init() {
     controls.update();
     frame += 1;
 
+    const imager = device === "nightshot" ? nightshot : infrared;
     if (mode === "nv" && realtime) {
-      // realtime path: raster the collapsed NIR band, tube on top. The
+      // realtime path: raster the collapsed NIR band, imager on top. The
       // camera-mounted IR beam follows the rig with no rebake, no reset.
       renderNirRealtime();
-      if (USE_TUBE) infrared.renderTexture(fluxRT.texture, frame, { dt });
+      if (USE_TUBE) imager.renderTexture(fluxRT.texture, frame, { dt });
     } else {
       const drew = USE_TRACER ? tracer.render() : true;
       if (mode === "nv" && drew && USE_TUBE) {
-        infrared.renderTexture(fluxRT.texture, frame, { dt });
+        imager.renderTexture(fluxRT.texture, frame, { dt });
       }
     }
     if ((frame & 7) === 0) hud.textContent = hudText();

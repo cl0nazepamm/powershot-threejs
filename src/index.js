@@ -30,6 +30,13 @@ export {
 } from "./infrared.js";
 
 export {
+  NIGHTSHOT_PRESET_KEYS,
+  NIGHTSHOT_PRESETS,
+  NightshotPipeline,
+  applyNightshotPreset,
+} from "./nightshot.js";
+
+export {
   EffectPassNode,
   FilmPassNode,
   InfraredPassNode,
