@@ -20,6 +20,7 @@ import {
   mix, max, min, dot, abs, floor, fract, sin, cos, sqrt, log, exp, step,
   smoothstep,
 } from "three/tsl";
+import { powershotLinearGrade } from "./pipeline.js";
 
 const LUM709 = vec3(0.2126, 0.7152, 0.0722);
 const TAU = 6.2831853;
@@ -92,7 +93,17 @@ function nirFromLinear(lin, ctx) {
 
   const mono = dot(lin, LUM709);
   sim = sim.max(0.0).pow(P.photocathodeGamma);
-  return mix(sim, mono, P.nirInput).max(0.0).mul(exp2u(P.exposure));
+  return fluxInputTrim(mix(sim, mono, P.nirInput).max(0.0), P);
+}
+
+// Input-gamma pre-trim shared by both flux branches - a power pivoted at 18%
+// grey (same semantics as film.js): in logE it rescales the scene around the
+// mid-grey anchor, like shooting a flatter/steeper scene, so tube gain, ABC
+// calibration and mid-grey neutrality stay untouched. Applied before the
+// exposure gain so that slider stays "stops at the photocathode". This is the
+// look-correction knob for grey/green mids the exposure slider can't fix.
+function fluxInputTrim(flux, P) {
+  return flux.div(0.18).max(1e-7).pow(P.inputGamma).mul(0.18).mul(exp2u(P.exposure));
 }
 
 // --- Stage 0: NIR prepass ---------------------------------------------------
@@ -108,7 +119,7 @@ function stNirPrepass(srcTex, ctx, { inputMode, inputEncoding }) {
     // dot. fluxScale calibrates the renderer's flux range onto the range the
     // tube presets were tuned for.
     const flux = texture(srcTex, screenUV).r;
-    return vec4(flux.max(0.0).mul(P.fluxScale).mul(exp2u(P.exposure)), 0.0, 0.0, 1.0);
+    return vec4(fluxInputTrim(flux.max(0.0).mul(P.fluxScale), P), 0.0, 0.0, 1.0);
   }
   const raw = texture(srcTex, screenUV).rgb;
   const lin = inputEncoding === "srgb" ? srgbToLinear(raw) : raw;
@@ -393,7 +404,9 @@ function stDevelop(srcTex, nirTex, ctx, analysisTex, abcGainTex, eyeMaskTex, sta
 
   // 11: phosphor colour map. sRGB encode only for display-referred handoff; a
   // linear output feeds a post stack that encodes at its own output stage.
-  const phosphor = phosphorMap(signal.clamp(0.0, 1.35), ctx);
+  // The post-effect grade lands here, on the linear phosphor colour — after
+  // AGC/ABC so the punch survives the tube's own normalisation.
+  const phosphor = powershotLinearGrade(phosphorMap(signal.clamp(0.0, 1.35), ctx), ctx);
   if (outputEncoding === "linear") {
     const effectColor = phosphor.max(0.0);
     const finalColor = mix(sourceSample.rgb, effectColor, ctx.power).max(0.0);
@@ -410,6 +423,9 @@ export function makeInfraredUniforms() {
     texel: uniform(new THREE.Vector2(1, 1)),
     analysisTexel: uniform(new THREE.Vector2(1, 1)),
     frame: uniform(0),
+    // post-effect grade on the linear phosphor output (powershotLinearGrade)
+    outputBrightness: uniform(0),
+    outputContrast: uniform(0),
     // frame delta in seconds, clamped by renderTexture (tab-switch spikes
     // would otherwise snap the ABC loop).
     dt: uniform(1 / 60),
@@ -419,6 +435,9 @@ export function makeInfraredUniforms() {
     P: {
       // photocathode spectral response
       exposure: uniform(1.0),
+      // 18%-pivoted input power (see fluxInputTrim). 1.0 = untouched
+      // scene-linear; <1 flattens grey/green mids, >1 steepens them.
+      inputGamma: uniform(1.0),
       nirInput: uniform(0.0),
       // true-NIR flux calibration (setInputMode("nir") path only)
       fluxScale: uniform(1.0),
@@ -652,6 +671,7 @@ export const INFRARED_PRESET_KEYS = Object.keys(INFRARED_PRESETS);
 export function applyInfraredPreset(ctx, preset) {
   const P = ctx.P;
   P.exposure.value = preset.exposure;
+  P.inputGamma.value = preset.input_gamma ?? 1.0;
   P.nirInput.value = preset.nir_input;
   P.fluxScale.value = preset.flux_scale ?? 1.0;
   P.spectralMix.value.set(...preset.spectral_mix);
@@ -833,6 +853,11 @@ export class InfraredPipeline {
     if (this.outputEncoding === next) return;
     this.outputEncoding = next;
     this.dirty = true;
+  }
+
+  setOutputColorGrading({ brightness = 0, contrast = 0 } = {}) {
+    this.ctx.outputBrightness.value = Number.isFinite(brightness) ? brightness : 0;
+    this.ctx.outputContrast.value = Number.isFinite(contrast) ? contrast : 0;
   }
 
   // Flat Vogel-disc halo profile instead of the separable gaussian.

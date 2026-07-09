@@ -926,8 +926,24 @@ function stOutput(tex, ctx) {
   return texture(tex, screenUV).rgb.div(LEVELS);
 }
 
+// Post-effect colour grade, scene-referred workflow style. Brightness is
+// photographic gain (slider +/-1 = +/-2 stops), contrast is a power law
+// pivoted on 18% grey — both applied to LINEAR colour ahead of the output
+// encode, so blacks stay anchored and highlights roll off naturally instead
+// of clipping around the 0.5 display pivot of the old CSS-filter math.
+// Shared by every PowerShot pipeline (digital/analog here, film, infrared;
+// nightshot forwards to its internal camera).
+const GRADE_PIVOT = 0.18;
+export function powershotLinearGrade(linearColor, ctx) {
+  const gained = linearColor.max(0.0).mul(exp(ctx.outputBrightness.mul(2.0 * Math.LN2)));
+  const exponent = ctx.outputContrast.add(1.0).max(0.05);
+  return gained.div(GRADE_PIVOT).pow(exponent).mul(GRADE_PIVOT);
+}
+
 function powershotOutputColorGrading(color, ctx) {
-  return color.mul(ctx.outputBrightness.add(1.0)).sub(0.5).mul(ctx.outputContrast.add(1.0)).add(0.5);
+  // The ISP output is display-encoded: decode to linear, grade, re-encode.
+  const lin = color.clamp(0.0, 1.0).pow(2.2);
+  return powershotLinearGrade(lin, ctx).pow(1.0 / 2.2).clamp(0.0, 1.0);
 }
 
 function powershotOutputAlpha(sourceSample, effectColor) {

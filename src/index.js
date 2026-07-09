@@ -4,6 +4,7 @@ export {
   STAGE_DEFS,
   applyPreset,
   makeUniforms,
+  powershotLinearGrade,
 } from "./pipeline.js";
 
 export {

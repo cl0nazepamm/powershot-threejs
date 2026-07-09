@@ -27,6 +27,7 @@ import {
   mix, clamp, max, min, dot, abs, floor, fract, sin, cos, sqrt, log, exp,
   step, smoothstep,
 } from "three/tsl";
+import { powershotLinearGrade } from "./pipeline.js";
 
 const LN10 = Math.LN10;
 const LUM709 = vec3(0.2126, 0.7152, 0.0722);
@@ -281,11 +282,12 @@ function stDevelop(srcTex, ctx, haloTex, inputEncoding) {
   const dirN = dirMix.div(sqrt(dot(dirMix, dirMix)).max(1e-6));
   out = vec3(outMean).add(dirN.mul(outMag));
 
-  const printView = linearToSrgb(out);
+  // post-effect grade on the linear print/negative before the output encode
+  const printView = linearToSrgb(powershotLinearGrade(out, ctx));
 
   // negative inspection view: the orange-masked negative itself
   const tNeg = pow10(dNeg.add(ctx.P.negMask).negate());
-  const negView = linearToSrgb(tNeg);
+  const negView = linearToSrgb(powershotLinearGrade(tNeg, ctx));
 
   const film = mix(printView, negView, ctx.P.negativeView);
   const sourceSample = texture(srcTex, screenUV);
@@ -304,6 +306,9 @@ export function makeFilmUniforms() {
     haloTexel: uniform(new THREE.Vector2(1, 1)),
     frame: uniform(0),
     power: uniform(1),
+    // post-effect grade on the linear print (powershotLinearGrade)
+    outputBrightness: uniform(0),
+    outputContrast: uniform(0),
     P: {
       exposure: uniform(0),
       // source contrast trim (not preset data — describes the input medium,
@@ -655,6 +660,11 @@ export class FilmPipeline {
     if (on) this.enabled.add(id);
     else this.enabled.delete(id);
     this.dirty = true;
+  }
+
+  setOutputColorGrading({ brightness = 0, contrast = 0 } = {}) {
+    this.ctx.outputBrightness.value = Number.isFinite(brightness) ? brightness : 0;
+    this.ctx.outputContrast.value = Number.isFinite(contrast) ? contrast : 0;
   }
 
   _rebuild() {

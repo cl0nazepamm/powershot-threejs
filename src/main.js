@@ -4,6 +4,7 @@ import {
   Pipeline, PRESETS, PRESET_KEYS, STAGE_DEFS, applyPreset,
   FilmPipeline, FILM_PRESETS, FILM_PRESET_KEYS, applyFilmPreset,
   InfraredPipeline, INFRARED_PRESETS, applyInfraredPreset,
+  NightshotPipeline, NIGHTSHOT_PRESETS, applyNightshotPreset,
 } from "./index.js";
 
 const MAX_WORK = 1600; // cap working resolution for snappy realtime
@@ -20,6 +21,7 @@ const els = {
   analogControls: document.getElementById("analog-controls"),
   filmControls: document.getElementById("film-controls"),
   infraredControls: document.getElementById("infrared-controls"),
+  nightshotControls: document.getElementById("nightshot-controls"),
   filmpreset: document.getElementById("filmpreset"),
   filmexposure: document.getElementById("filmexposure"),
   filmexposureval: document.getElementById("filmexposureval"),
@@ -68,6 +70,20 @@ const els = {
   infraredvignetteval: document.getElementById("infraredvignetteval"),
   infraredhotspot: document.getElementById("infraredhotspot"),
   infraredhotspotval: document.getElementById("infraredhotspotval"),
+  nightshotexposure: document.getElementById("nightshotexposure"),
+  nightshotexposureval: document.getElementById("nightshotexposureval"),
+  nightshotgamma: document.getElementById("nightshotgamma"),
+  nightshotgammaval: document.getElementById("nightshotgammaval"),
+  nightshotresponse: document.getElementById("nightshotresponse"),
+  nightshotresponseval: document.getElementById("nightshotresponseval"),
+  nightshotsmear: document.getElementById("nightshotsmear"),
+  nightshotsmearval: document.getElementById("nightshotsmearval"),
+  nightshoteyes: document.getElementById("nightshoteyes"),
+  nightshoteyesval: document.getElementById("nightshoteyesval"),
+  nightshotnoise: document.getElementById("nightshotnoise"),
+  nightshotnoiseval: document.getElementById("nightshotnoiseval"),
+  nightshotvhs: document.getElementById("nightshotvhs"),
+  nightshotvhsval: document.getElementById("nightshotvhsval"),
   lens: document.getElementById("lens"),
   lensval: document.getElementById("lensval"),
   bloom: document.getElementById("bloom"),
@@ -130,7 +146,7 @@ const els = {
   status: document.getElementById("status"),
 };
 
-let renderer, pipeline, filmPipeline, infraredPipeline, source = null;
+let renderer, pipeline, filmPipeline, infraredPipeline, nightshotPipeline, source = null;
 let currentVideo = null;
 let videoFrameDirty = false;
 // Firefox's WebGPU can't copy an HTMLVideoElement directly into a texture; when
@@ -149,6 +165,7 @@ let mode = "analog";
 let presetKey = "cybershot";
 let filmPresetKey = FILM_PRESET_KEYS[0];
 let infraredPresetKey = "white_phosphor";
+let nightshotPresetKey = "nightshot_plus";
 let resolutionScale = 0.65;
 let busy = false;
 let freezeNoise = false;
@@ -178,6 +195,7 @@ async function init() {
   pipeline.setMode(mode === "analog" ? "analog" : "digital");
   filmPipeline = new FilmPipeline(renderer);
   infraredPipeline = new InfraredPipeline(renderer);
+  nightshotPipeline = new NightshotPipeline(renderer);
 
   buildPresetUI();
   buildFilmPresetUI();
@@ -188,6 +206,7 @@ async function init() {
   applyPreset(pipeline.ctx, PRESETS[presetKey]);
   applyFilmPreset(filmPipeline.ctx, FILM_PRESETS[filmPresetKey]);
   applyInfraredPreset(infraredPipeline.ctx, INFRARED_PRESETS[infraredPresetKey]);
+  applyNightshotPreset(nightshotPipeline, NIGHTSHOT_PRESETS[nightshotPresetKey]);
   syncEffectUI();
 
   renderer.setAnimationLoop(tick);
@@ -316,11 +335,17 @@ function wireInput() {
   els.brightness.addEventListener("input", () => {
     outputBrightness = els.brightness.value / 100;
     pipeline.setOutputColorGrading({ brightness: outputBrightness, contrast: outputContrast });
+    filmPipeline.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
+    infraredPipeline.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
+    nightshotPipeline.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
     els.brightnessval.textContent = outputBrightness.toFixed(2);
   });
   els.contrast.addEventListener("input", () => {
     outputContrast = els.contrast.value / 100;
     pipeline.setOutputColorGrading({ brightness: outputBrightness, contrast: outputContrast });
+    filmPipeline.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
+    infraredPipeline.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
+    nightshotPipeline.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
     els.contrastval.textContent = outputContrast.toFixed(2);
   });
   els.analog.addEventListener("input", () => {
@@ -421,6 +446,23 @@ function wireInput() {
   wireInfraredSlider(els.infraredvignette, els.infraredvignetteval, (v) => { IP().vignette.value = v; });
   wireInfraredSlider(els.infraredhotspot, els.infraredhotspotval, (v) => { IP().hotspot.value = v; });
 
+  const wireNightshotSlider = (el, valEl, apply) => {
+    el.addEventListener("input", () => {
+      const v = el.value / 100;
+      apply(v);
+      valEl.textContent = v.toFixed(2);
+    });
+  };
+  const NS = () => nightshotPipeline.ir.ctx.P;
+  const NSA = () => nightshotPipeline.cam.ctx.P;
+  wireNightshotSlider(els.nightshotexposure, els.nightshotexposureval, (v) => { NS().exposure.value = v; });
+  wireNightshotSlider(els.nightshotgamma, els.nightshotgammaval, (v) => { NS().inputGamma.value = v; });
+  wireNightshotSlider(els.nightshotresponse, els.nightshotresponseval, (v) => { NS().nirInput.value = v; });
+  wireNightshotSlider(els.nightshotsmear, els.nightshotsmearval, (v) => { nightshotPipeline.ctx.P.smear.value = v; });
+  wireNightshotSlider(els.nightshoteyes, els.nightshoteyesval, (v) => { NS().eyeStrength.value = v; });
+  wireNightshotSlider(els.nightshotnoise, els.nightshotnoiseval, (v) => { NS().noiseAmount.value = v; });
+  wireNightshotSlider(els.nightshotvhs, els.nightshotvhsval, (v) => { NSA().analogStrength.value = v; });
+
   els.freeze.addEventListener("click", () => {
     freezeNoise = !freezeNoise;
     syncFreezeUI();
@@ -495,6 +537,7 @@ function syncModeUI() {
   els.analogControls.hidden = mode !== "analog";
   els.filmControls.hidden = mode !== "film";
   els.infraredControls.hidden = mode !== "infrared";
+  els.nightshotControls.hidden = mode !== "nightshot";
   els.mode.value = mode;
 }
 
@@ -502,6 +545,7 @@ function syncFreezeUI() {
   const noun = mode === "analog" ? "tape"
     : mode === "film" ? "grain"
     : mode === "infrared" ? "phosphor"
+    : mode === "nightshot" ? "CCD"
     : "noise";
   els.freeze.textContent = freezeNoise ? `unfreeze ${noun}` : `freeze ${noun}`;
   els.freeze.classList.toggle("active", freezeNoise);
@@ -603,6 +647,15 @@ function syncEffectUI() {
   setSlider(els.infraredvignette, els.infraredvignetteval, IP.vignette.value);
   setSlider(els.infraredhotspot, els.infraredhotspotval, IP.hotspot.value);
 
+  const NS = nightshotPipeline.ir.ctx.P;
+  setSlider(els.nightshotexposure, els.nightshotexposureval, NS.exposure.value);
+  setSlider(els.nightshotgamma, els.nightshotgammaval, NS.inputGamma.value);
+  setSlider(els.nightshotresponse, els.nightshotresponseval, NS.nirInput.value);
+  setSlider(els.nightshotsmear, els.nightshotsmearval, nightshotPipeline.ctx.P.smear.value);
+  setSlider(els.nightshoteyes, els.nightshoteyesval, NS.eyeStrength.value);
+  setSlider(els.nightshotnoise, els.nightshotnoiseval, NS.noiseAmount.value);
+  setSlider(els.nightshotvhs, els.nightshotvhsval, nightshotPipeline.cam.ctx.P.analogStrength.value);
+
   syncFreezeUI();
 }
 
@@ -692,6 +745,7 @@ async function setVideoSource(video, label) {
   pipeline.setSource(source);
   filmPipeline.setSource(source);
   infraredPipeline.setSource(source);
+  nightshotPipeline.setSource(source);
   resizeForSource();
   els.videoControls.hidden = false;
   els.volume.value = Math.round(userVolume * 100);
@@ -759,6 +813,7 @@ function setSource(bitmap, label) {
   pipeline.setSource(source);
   filmPipeline.setSource(source);
   infraredPipeline.setSource(source);
+  nightshotPipeline.setSource(source);
   resizeForSource();
 }
 
@@ -768,7 +823,10 @@ function resizeForSource() {
   const imgH = source.userData.h;
   // film is not tied to a camera sensor — it works at the full display fit
   const displaySensor = mode === "film" ? [MAX_WORK, MAX_WORK]
-    : mode === "infrared" ? INFRARED_PRESETS[infraredPresetKey].sensor_resolution
+    : mode === "infrared" || mode === "nightshot"
+      ? (mode === "nightshot"
+        ? (NIGHTSHOT_PRESETS[nightshotPresetKey].ir.sensor_resolution || [1280, 960])
+        : INFRARED_PRESETS[infraredPresetKey].sensor_resolution)
     : PRESETS[presetKey].sensor_resolution;
   const processSensor = mode === "analog" ? ANALOG_WORK : displaySensor;
   const displayFit = Math.min(displaySensor[0] / imgW, displaySensor[1] / imgH, MAX_WORK / imgW, MAX_WORK / imgH, 1.0);
@@ -783,6 +841,7 @@ function resizeForSource() {
   els.canvas.style.height = `${displayH}px`;
   if (mode === "film") filmPipeline.setSize(w, h);
   else if (mode === "infrared") infraredPipeline.setSize(w, h);
+  else if (mode === "nightshot") nightshotPipeline.setSize(w, h);
   else pipeline.setSize(w, h);
 }
 
@@ -881,6 +940,7 @@ async function tick() {
   try {
     if (mode === "film") await filmPipeline.render(frame);
     else if (mode === "infrared") await infraredPipeline.render(frame, { dt });
+    else if (mode === "nightshot") await nightshotPipeline.render(frame, { dt });
     else await pipeline.render(frame);
   } catch (err) {
     setStatus("render error:\n" + (err?.message || err));
@@ -899,15 +959,18 @@ async function tick() {
     fpsLast = now; fpsCount = 0;
     const r = mode === "film" ? filmPipeline.ctx.resolution.value
       : mode === "infrared" ? infraredPipeline.ctx.resolution.value
+      : mode === "nightshot" ? nightshotPipeline.ir.ctx.resolution.value
       : pipeline.ctx.resolution.value;
     const frozen = freezeNoise ? " · frozen" : "";
     const modeLabel = mode === "analog" ? "Analog"
       : mode === "film" ? FILM_PRESETS[filmPresetKey].name
       : mode === "infrared" ? INFRARED_PRESETS[infraredPresetKey].name
+      : mode === "nightshot" ? NIGHTSHOT_PRESETS[nightshotPresetKey].name
       : PRESETS[presetKey].name;
     const stageLabel = mode === "analog" ? "analog mode"
       : mode === "film" ? "film mode"
       : mode === "infrared" ? "infrared mode"
+      : mode === "nightshot" ? "nightshot mode"
       : `${pipeline.enabled.size}/${STAGE_DEFS.length} stages`;
     const rec = recorder
       ? (currentVideo ? ` · ● REC ${fmtTime(currentVideo.currentTime)}/${fmtTime(currentVideo.duration)}` : " · ● REC")

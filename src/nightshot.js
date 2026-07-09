@@ -183,6 +183,10 @@ export class NightshotPipeline {
     this.cam.setOutputColorGrading?.(grading);
   }
 
+  setSource(tex) {
+    this.ir.setSource(tex);
+  }
+
   setSize(w, h) {
     if (w === this.size.w && h === this.size.h) return;
     this.size = { w, h };
@@ -272,6 +276,10 @@ export class NightshotPipeline {
     }
 
     return this.cam.renderTexture(camSource.texture, frame, { outputTarget }) === true;
+  }
+
+  async render(frame, options = {}) {
+    return this.renderTexture(this.ir.source, frame, options);
   }
 
   clearHistory() {

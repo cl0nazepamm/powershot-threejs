@@ -18,6 +18,7 @@
         <option value="digital">Digital</option>
         <option value="film">Film</option>
         <option value="infrared">White Phosphor</option>
+        <option value="nightshot">NightShot</option>
       </select>
     </div>
 
@@ -268,6 +269,43 @@
       <div>
         <label for="infraredhotspot">IR hotspot · <span id="infraredhotspotval">0.10</span></label>
         <input id="infraredhotspot" type="range" min="0" max="100" value="10">
+      </div>
+    </div>
+
+    <div id="nightshot-controls" hidden>
+      <div>
+        <label for="nightshotexposure">Exposure (stops) · <span id="nightshotexposureval">0.00</span></label>
+        <input id="nightshotexposure" type="range" min="-200" max="400" value="0">
+      </div>
+
+      <div>
+        <label for="nightshotgamma">Input gamma · <span id="nightshotgammaval">1.00</span></label>
+        <input id="nightshotgamma" type="range" min="35" max="200" value="100">
+      </div>
+
+      <div>
+        <label for="nightshotresponse">IR response · <span id="nightshotresponseval">0.00</span></label>
+        <input id="nightshotresponse" type="range" min="0" max="100" value="0">
+      </div>
+
+      <div>
+        <label for="nightshotsmear">Vertical smear · <span id="nightshotsmearval">0.90</span></label>
+        <input id="nightshotsmear" type="range" min="0" max="200" value="90">
+      </div>
+
+      <div>
+        <label for="nightshoteyes">LED flare · <span id="nightshoteyesval">0.90</span></label>
+        <input id="nightshoteyes" type="range" min="0" max="200" value="90">
+      </div>
+
+      <div>
+        <label for="nightshotnoise">CCD noise · <span id="nightshotnoiseval">0.50</span></label>
+        <input id="nightshotnoise" type="range" min="0" max="200" value="50">
+      </div>
+
+      <div>
+        <label for="nightshotvhs">Tape amount · <span id="nightshotvhsval">1.15</span></label>
+        <input id="nightshotvhs" type="range" min="0" max="300" value="115">
       </div>
     </div>
 

@@ -16,6 +16,7 @@
 //   - a sodium street lamp (589 nm line) goes dim; water goes black; skin lifts
 //
 // Keys: V visible/NV · N tube/NightShot · I toggle IR illuminator · [ ] tube exposure
+//       - = input gamma (18%-pivoted mid correction)
 //       NightShot: , . VHS strength · < > tape noise · ; ' CCD smear · drag orbit
 
 import * as THREE from "three/webgpu";
@@ -304,6 +305,7 @@ function hudText() {
       : "",
     `IR illum    ${irOn ? "ON — 850 nm, black in RGB" : "OFF"}   [I]`,
     `tube exp    ${P.exposure.value.toFixed(2)} stops   [ / ]`,
+    `input γ     ${P.inputGamma.value.toFixed(2)}   - / =`,
     rt ? "" : `samples     ${tracer.getSampleCount()}`,
     statusLine ? `status      ${statusLine}` : "",
     "",
@@ -374,6 +376,9 @@ async function init() {
     }
     if (e.key === "[") activeIrCtx().P.exposure.value -= 0.25;
     if (e.key === "]") activeIrCtx().P.exposure.value += 0.25;
+    // 18%-pivoted input gamma — the grey/green mid-correction knob
+    if (e.key === "-") activeIrCtx().P.inputGamma.value = Math.max(0.35, activeIrCtx().P.inputGamma.value - 0.05);
+    if (e.key === "=") activeIrCtx().P.inputGamma.value = Math.min(2.0, activeIrCtx().P.inputGamma.value + 0.05);
     // NightShot tape-path trims
     const clamp03 = (v) => Math.min(3, Math.max(0, v));
     const A = nightshot.cam.ctx.P;

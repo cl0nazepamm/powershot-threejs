@@ -51,15 +51,19 @@ To keep the same on-screen scale while processing at a lower authentic analog re
 
 For motion-picture film emulation, use `FilmPipeline` instead. It models a negative-to-print chain with film stocks, grain, halation, gate weave, flicker, print warmth, and negative inspection.
 
+**Film replaces the tonemap pipeline entirely.** Do not run ACES / AgX / renderer tone mapping (or any other display transform) before it — the negative→print H&D chain *is* the tone map. Feed it your **linear deferred** (scene-linear HDR) render target and call `film.setInputEncoding("linear")` so it skips the sRGB decode. Keep `renderer.toneMapping = THREE.NoToneMapping` on the source pass.
+
 ```js
 import * as THREE from "three/webgpu";
 import { FilmPipeline, FILM_PRESETS, applyFilmPreset } from "powershot-threejs";
 
 const renderer = new THREE.WebGPURenderer({ canvas });
 await renderer.init();
+renderer.toneMapping = THREE.NoToneMapping;
 
 const film = new FilmPipeline(renderer);
 film.setSize(width, height);
+film.setInputEncoding("linear"); // scene-linear deferred / HDR RT — not display-referred
 applyFilmPreset(film.ctx, FILM_PRESETS.kodak_500t);
 
 // Optional controls.
@@ -69,7 +73,7 @@ film.ctx.P.grainStrength.value = 1.0;
 film.ctx.P.halStrength.value = 0.35;
 film.ctx.P.negativeView.value = 0; // set to 1 to inspect the negative
 
-film.renderTexture(inputTexture, frame);
+film.renderTexture(linearDeferredTexture, frame);
 ```
 
 For infrared / night-vision rendering, use `InfraredPipeline`. It has a dedicated pseudo-NIR signal path with local gain, broad intensifier halo, pale highlight cores, dark-biased scintillation, tube vignette, and optional eye-mask gating. The built-in preset is tuned around a P45-style white phosphor tube rather than a flat color grade.
@@ -185,11 +189,11 @@ renderPipeline.outputNode = effectPass(scenePass, {
 Useful controls:
 
 - `powershot.ctx.power.value` - blends between source and effect.
-- `powershot.setInputEncoding("linear")` - the source is a scene-linear HDR render target: photographic exposure (`powershot.ctx.sceneExposure.value`, stops) and the camera OETF are applied at input, making the ISP the imager (feed it with the renderer's tone mapping OFF). `FilmPipeline` takes the same flag (skips the sRGB decode; its own `exposure` is already in stops).
+- `powershot.setInputEncoding("linear")` - the source is a scene-linear HDR render target: photographic exposure (`powershot.ctx.sceneExposure.value`, stops) and the camera OETF are applied at input, making the ISP the imager (feed it with the renderer's tone mapping OFF). `FilmPipeline` takes the same flag (skips the sRGB decode; its own `exposure` is already in stops) — and for film, that linear deferred path is the intended setup: Film fully replaces tonemap, so do not tone-map before it.
 - `powershot.ctx.noiseScale.value` - global noise scale.
 - `powershot.ctx.P.jpegStrength.value` - digital JPEG amount.
 - `powershot.ctx.P.analogStrength.value` - analog/VHS amount.
-- `powershot.setOutputColorGrading({ brightness, contrast })` - final grading.
+- `powershot.setOutputColorGrading({ brightness, contrast })` - post-effect corrective grade on linear colour (`powershotLinearGrade`: brightness = photographic gain, ±1 ≈ ±2 stops; contrast = power pivoted on 18% grey). Applied after the ISP / film print / phosphor — not as input exposure. Same API on `FilmPipeline` / `InfraredPipeline` / `NightshotPipeline` (nightshot forwards to its camera ISP).
 
 ## Structure
 
