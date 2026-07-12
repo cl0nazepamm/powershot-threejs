@@ -1177,6 +1177,12 @@ export class Pipeline {
     this.dirty = true;
   }
 
+  // Scene-linear plate gain in photographic stops. This happens before the
+  // camera OETF / ISP; output brightness and contrast remain post-effect.
+  setInputExposure(stops = 0) {
+    this.ctx.sceneExposure.value = Number.isFinite(stops) ? stops : 0;
+  }
+
   _mat(colorNode) {
     const m = new THREE.MeshBasicNodeMaterial();
     m.colorNode = colorNode;

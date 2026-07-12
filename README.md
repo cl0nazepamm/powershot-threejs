@@ -189,7 +189,8 @@ renderPipeline.outputNode = effectPass(scenePass, {
 Useful controls:
 
 - `powershot.ctx.power.value` - blends between source and effect.
-- `powershot.setInputEncoding("linear")` - the source is a scene-linear HDR render target: photographic exposure (`powershot.ctx.sceneExposure.value`, stops) and the camera OETF are applied at input, making the ISP the imager (feed it with the renderer's tone mapping OFF). `FilmPipeline` takes the same flag (skips the sRGB decode; its own `exposure` is already in stops) — and for film, that linear deferred path is the intended setup: Film fully replaces tonemap, so do not tone-map before it.
+- `powershot.setInputEncoding("linear")` - the source is a scene-linear HDR render target: input gain and the camera OETF are applied before the ISP, making it the imager (feed it with the renderer's tone mapping OFF). `FilmPipeline` takes the same flag (skips the sRGB decode; its own `exposure` is already in stops) — and for film, that linear deferred path is the intended setup: Film fully replaces tonemap, so do not tone-map before it.
+- `powershot.setInputExposure(stops)` - scene-linear plate gain before the effect. Available on `Pipeline`, `InfraredPipeline`, and `NightshotPipeline`; NightShot forwards it to its sensor. This is separate from each mode's own exposure trim and intentionally absent from `FilmPipeline`, whose stock exposure remains authoritative.
 - `powershot.ctx.noiseScale.value` - global noise scale.
 - `powershot.ctx.P.jpegStrength.value` - digital JPEG amount.
 - `powershot.ctx.P.analogStrength.value` - analog/VHS amount.

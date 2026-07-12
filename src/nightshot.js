@@ -179,6 +179,10 @@ export class NightshotPipeline {
     this.ir.setInputEncoding(mode);
   }
 
+  setInputExposure(stops = 0) {
+    this.ir.setInputExposure?.(stops);
+  }
+
   setOutputColorGrading(grading) {
     this.cam.setOutputColorGrading?.(grading);
   }

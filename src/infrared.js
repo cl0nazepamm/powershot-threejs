@@ -93,7 +93,7 @@ function nirFromLinear(lin, ctx) {
 
   const mono = dot(lin, LUM709);
   sim = sim.max(0.0).pow(P.photocathodeGamma);
-  return fluxInputTrim(mix(sim, mono, P.nirInput).max(0.0), P);
+  return fluxInputTrim(mix(sim, mono, P.nirInput).max(0.0), ctx);
 }
 
 // Input-gamma pre-trim shared by both flux branches - a power pivoted at 18%
@@ -102,8 +102,10 @@ function nirFromLinear(lin, ctx) {
 // calibration and mid-grey neutrality stay untouched. Applied before the
 // exposure gain so that slider stays "stops at the photocathode". This is the
 // look-correction knob for grey/green mids the exposure slider can't fix.
-function fluxInputTrim(flux, P) {
-  return flux.div(0.18).max(1e-7).pow(P.inputGamma).mul(0.18).mul(exp2u(P.exposure));
+function fluxInputTrim(flux, ctx) {
+  const P = ctx.P;
+  return flux.div(0.18).max(1e-7).pow(P.inputGamma).mul(0.18)
+    .mul(exp2u(P.exposure.add(ctx.inputExposure)));
 }
 
 // --- Stage 0: NIR prepass ---------------------------------------------------
@@ -119,7 +121,7 @@ function stNirPrepass(srcTex, ctx, { inputMode, inputEncoding }) {
     // dot. fluxScale calibrates the renderer's flux range onto the range the
     // tube presets were tuned for.
     const flux = texture(srcTex, screenUV).r;
-    return vec4(fluxInputTrim(flux.max(0.0).mul(P.fluxScale), P), 0.0, 0.0, 1.0);
+    return vec4(fluxInputTrim(flux.max(0.0).mul(P.fluxScale), ctx), 0.0, 0.0, 1.0);
   }
   const raw = texture(srcTex, screenUV).rgb;
   const lin = inputEncoding === "srgb" ? srgbToLinear(raw) : raw;
@@ -391,7 +393,9 @@ function stDevelop(srcTex, nirTex, ctx, analysisTex, abcGainTex, eyeMaskTex, sta
 
   // 10: eyepiece shading - circular field-stop vignette + centre hotspot only.
   // No CRT scanlines and no whole-frame flicker: an intensifier is not a raster
-  // display and autogating runs at kHz, imperceptibly.
+  // display and autogating runs at kHz, imperceptibly. The hotspot is gain, not
+  // emitted light: multiplying preserves true black instead of painting a
+  // green veil over unexposed NightShot pixels.
   if (stages.display) {
     const p = screenUV.sub(0.5);
     const aspect = ctx.resolution.x.div(ctx.resolution.y);
@@ -399,7 +403,7 @@ function stDevelop(srcTex, nirTex, ctx, analysisTex, abcGainTex, eyeMaskTex, sta
     const radius = sqrt(dot(q, q));
     const vignette = float(1.0).sub(smoothstep(0.25, 0.78, radius).mul(P.vignette));
     const hotspot = exp(radius.mul(radius).mul(-8.0)).mul(P.hotspot);
-    signal = signal.mul(vignette).add(hotspot);
+    signal = signal.mul(vignette).mul(hotspot.add(1.0));
   }
 
   // 11: phosphor colour map. sRGB encode only for display-referred handoff; a
@@ -426,6 +430,9 @@ export function makeInfraredUniforms() {
     // post-effect grade on the linear phosphor output (powershotLinearGrade)
     outputBrightness: uniform(0),
     outputContrast: uniform(0),
+    // Extra scene-linear plate gain in stops, before the tube response. Kept
+    // separate from P.exposure so host exposure can stack with the mode trim.
+    inputExposure: uniform(0),
     // frame delta in seconds, clamped by renderTexture (tab-switch spikes
     // would otherwise snap the ABC loop).
     dt: uniform(1 / 60),
@@ -844,6 +851,10 @@ export class InfraredPipeline {
     if (this.inputEncoding === next) return;
     this.inputEncoding = next;
     this.dirty = true;
+  }
+
+  setInputExposure(stops = 0) {
+    this.ctx.inputExposure.value = Number.isFinite(stops) ? stops : 0;
   }
 
   // "srgb" (default): display-referred output. "linear": hand off to a post

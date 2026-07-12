@@ -13,7 +13,7 @@
 //     -> projected transmittance -> print-to-display 3x3 -> sRGB out
 //
 // Stage budget (rule: only genuinely spatial work gets its own pass):
-//   1. halation extract   (quarter res)  — threshold scene-linear highlights
+//   1. halation extract   (quarter res)  — 4×4 box downsample + threshold
 //   2. halation blur H    (quarter res)
 //   3. halation blur V    (quarter res)
 //   4. develop            (full res)     — every point op above, fused
@@ -172,9 +172,20 @@ function filmOutputAlpha(sourceSample, effectColor) {
 // ---------------------------------------------------------------------------
 
 // Pass 1 — halation source: scene-linear highlights above threshold, rendered
-// into the quarter-res target (the downsample IS the sampling).
+// into the quarter-res target. Each output pixel covers a 4×4 full-res
+// footprint — box-filter that footprint before thresholding. A single center
+// tap (old "downsample IS the sampling") aliases HDR window edges into a
+// visible checker in the soft halo once inputEncoding is "linear".
 function stHaloExtract(srcTex, ctx, inputEncoding) {
-  const lin = sceneExposure(srcTex, ctx, weavedUV(ctx), inputEncoding);
+  const baseUv = weavedUV(ctx);
+  let sum = vec3(0.0);
+  for (let y = 0; y < 4; y++) {
+    for (let x = 0; x < 4; x++) {
+      const off = ctx.texel.mul(vec2(x - 1.5, y - 1.5));
+      sum = sum.add(sceneExposure(srcTex, ctx, baseUv.add(off), inputEncoding));
+    }
+  }
+  const lin = sum.mul(1.0 / 16.0);
   const lum = dot(lin, LUM709);
   const m = smoothstep(ctx.P.halThreshold, ctx.P.halThreshold.add(ctx.P.halSoftness), lum);
   return lin.mul(m);
