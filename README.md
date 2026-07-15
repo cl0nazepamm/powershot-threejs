@@ -91,7 +91,7 @@ await renderer.init();
 
 const infrared = new InfraredPipeline(renderer);
 infrared.setSize(width, height);
-infrared.setInputMode("rgb"); // "rgb" simulates NIR from RGB, "nir" treats the source as mono/real NIR
+infrared.setInputMode("rgb"); // "rgb" simulates NIR; "nir" reads a linear mono NIR signal
 applyInfraredPreset(infrared.ctx, INFRARED_PRESETS.white_phosphor);
 
 // Optional aligned mask texture for eye/retinal flare regions.
@@ -110,7 +110,8 @@ Useful infrared controls:
 - `infrared.ctx.P.glowSaturate.value` - halo source clip; brighter sources saturate the halo core instead of growing its radius.
 - `infrared.ctx.P.eyeStrength.value` - compact highlight / eye flare amount.
 - `infrared.ctx.P.noiseAmount.value` - master monochrome sensor and phosphor noise.
-- `infrared.setInputMode("nir")` - the source is true linear photocathode flux in the red channel (e.g. a spectral renderer's NIR output); read raw, no decode, no RGB heuristic. Calibrate with `infrared.ctx.P.fluxScale.value` and start from the `white_phosphor_nir` preset. The input contract: a single-channel LINEAR electron-flux texture (no tone mapping, no sRGB encode), scaled so unlit night ground lands around 0.02–0.05.
+- `infrared.setInputMode("nir")` - the source is a linear monochrome NIR or relative-photocathode-response signal in the red channel (e.g. a spectral renderer's NIR output); read raw, no decode, no RGB heuristic. Calibrate with `infrared.ctx.P.fluxScale.value` and start from the `white_phosphor_nir` preset. The input contract is a single-channel LINEAR texture with no tone mapping or sRGB encode. The included preset is visually calibrated, not an absolute electron-count model.
+- `infrared.setElectronModel({ electronsPerUnit: 1024 })` - opt into input-referred photoelectron shot noise. `electronsPerUnit` maps relative signal `1.0` to an expected count; the existing `ebi` value supplies the independently sampled dark background. Call `setElectronModel(false)` to restore the original path. It is disabled by default and does not alter Speedball GI.
 - `infrared.setInputEncoding("linear")` - the "rgb" source is a linear HDR render target rather than sRGB-encoded (avoids a double decode).
 - `infrared.setOutputEncoding("linear")` - emit linear output for a post stack that encodes at its own output stage.
 - `infrared.setHaloDisc(true)` - flat disc halo profile instead of a gaussian.
@@ -205,11 +206,13 @@ Useful controls:
 - `src/film.js` - reusable motion-picture film emulation pipeline and stock presets.
 - `src/infrared.js` - reusable pseudo-NIR night-vision pipeline and presets.
 - `src/render-pipeline.js` - RenderPipeline output-node adapters for PowerShot effects.
-- `nv.html` + `src/nv-demo.js` - true-NIR night-vision demo: the speedball-gi
-  spectral tracer (NV mode) renders linear photocathode flux that feeds
-  `setInputMode("nir")` - no RGB heuristic anywhere.
-- `src/nir_band.js` - realtime band-collapsed raster twin of the tracer's
-  direct term (exact spectral integrals, zero Monte Carlo noise).
+- `nv.html` + `src/nv-demo.js` - spectral NIR night-vision demo: the speedball-gi
+  spectral tracer (NV mode) renders a linear relative photocathode response that feeds
+  `setInputMode("nir")` - no RGB heuristic anywhere. The tube enables the opt-in
+  relative-electron model; press `E` to compare it with the original noise path.
+- `src/nir_band.js` - realtime three-band raster approximation of the tracer's
+  direct term. Material and emitter spectra stay separate until Three performs
+  component-wise lighting, then the bands collapse through photocathode weights.
 - `src/presets.js` - camera preset values.
 - `src/styles.css` - app UI styles.
 - `public/logo.png` - PowerSHOT logo.

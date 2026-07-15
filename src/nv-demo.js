@@ -1,9 +1,10 @@
-// True-NIR night-vision test scene.
+// Spectral NIR night-vision test scene.
 //
 // The speedball spectral path tracer (speedball-gi, NV mode) renders a night yard
 // at hero wavelengths λ ∈ [550, 900] nm importance-sampled against a Gen-3
-// GaAs photocathode. The resulting LINEAR electron flux feeds the PowerSHOT
-// image-intensifier model (setInputMode("nir")) — no RGB heuristic anywhere.
+// GaAs photocathode. The resulting LINEAR relative photocathode response feeds
+// the PowerSHOT image-intensifier model (setInputMode("nir")) — no RGB
+// heuristic anywhere.
 //
 // The scene is built to prove the physics:
 //   - an 850 nm IR ILLUMINATOR is bolted to the camera (black in RGB —
@@ -20,6 +21,7 @@
 //       NightShot: , . VHS strength · < > tape noise · ; ' CCD smear · drag orbit
 
 import * as THREE from "three/webgpu";
+import { dot, screenUV, texture, vec3, vec4 } from "three/tsl";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createSpectralTracer } from "speedball-gi/spectral-tracer";
 import { createNirBand } from "./nir_band.js";
@@ -36,15 +38,20 @@ const hud = document.getElementById("hud");
 // Keep the traced resolution tube-ish: 1 spp/frame accumulates, and the
 // intensifier is tuned around ~1280×960 anyway.
 const MAX_PIXELS = 1280 * 800;
+const ELECTRON_PROFILE = Object.freeze({
+  electronsPerUnit: 1024,
+});
 
-let renderer, scene, camera, controls, tracer, infrared, nightshot, fluxRT;
+let renderer, scene, camera, controls, tracer, infrared, nightshot;
+let nirBandsRT, fluxRT, collapseQuad;
 let irLight, mode = "nv", irOn = true;
+let electronModelOn = true;
 // imaging device consuming the flux: Gen-3 tube or Sony NightShot camcorder
 let device = "tube";
 let frame = 0, lastT = 0, statusLine = "";
-// realtime band-collapsed raster path (see src/nir_band.js)
+// realtime three-band raster path (see src/nir_band.js)
 let realtime = true, band = null;
-const nirMats = new Map();      // original material → monochrome NIR material
+const nirMats = new Map();      // original material -> three-band NIR material
 const lightRestore = [];        // [{ light, color, intensity }]
 
 // bisect flags: ?mode=visible · ?tube=0 (raw flux, no intensifier) · ?trace=0
@@ -207,22 +214,26 @@ function buildScene() {
 }
 
 // ── realtime NIR band raster ─────────────────────────────────────────
-// Swap every material for its collapsed monochrome twin and every light for a
-// white light at its collapsed NIR flux, raster into the flux RT with shadow
-// maps, restore. Direct term matches the tracer's NEE analytically; indirect
-// bounces are the accuracy traded for framerate — the tube re-noises either
-// way, so the horror-game loop stays authentic.
+// RGB temporarily carries three NIR bands. Materials and lights are evaluated
+// independently per band, Three performs the component-wise lighting, and one
+// fullscreen pass collapses the result through the photocathode weights.
 function nirMaterialFor(m) {
+  if (Array.isArray(m)) return m.map(nirMaterialFor);
   let nm = nirMats.get(m);
   if (!nm) {
-    const r = band.reflectance(m);
-    const e = band.emissiveFlux(m);
+    const r = band.reflectanceBands(m);
+    const e = band.emissiveBands(m);
     nm = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(r, r, r),
+      color: new THREE.Color().setRGB(r[0], r[1], r[2]),
       roughness: Number.isFinite(m.roughness) ? m.roughness : 1,
       metalness: Number.isFinite(m.metalness) ? m.metalness : 0,
+      side: m.side,
+      transparent: m.transparent === true,
+      opacity: Number.isFinite(m.opacity) ? m.opacity : 1,
+      alphaTest: Number.isFinite(m.alphaTest) ? m.alphaTest : 0,
     });
-    nm.emissive.setRGB(e, e, e);
+    nm.emissive.setRGB(e[0], e[1], e[2]);
+    nm.toneMapped = false;
     nirMats.set(m, nm);
   }
   return nm;
@@ -230,24 +241,34 @@ function nirMaterialFor(m) {
 
 function renderNirRealtime() {
   const swaps = [];
-  scene.traverse((o) => {
-    if (o.isMesh) { swaps.push([o, o.material]); o.material = nirMaterialFor(o.material); }
-  });
-  lightRestore.length = 0;
-  scene.traverse((o) => {
-    if (!o.isLight || o.isAmbientLight || o.isHemisphereLight) return;
-    lightRestore.push({ light: o, color: o.color.clone(), intensity: o.intensity });
-    const flux = band.lightFlux(o); // integrals are cheap; live-tracks toggles
-    o.color.setRGB(1, 1, 1);
-    o.intensity = flux;
-  });
-
   const prevTarget = renderer.getRenderTarget?.() ?? null;
   const prevTM = renderer.toneMapping;
   try {
+    scene.traverse((o) => {
+      if (!o.isMesh) return;
+      swaps.push([o, o.material]);
+      o.material = nirMaterialFor(o.material);
+    });
+    lightRestore.length = 0;
+    scene.traverse((o) => {
+      if (!o.isLight || o.isAmbientLight || o.isHemisphereLight) return;
+      lightRestore.push({ light: o, color: o.color.clone(), intensity: o.intensity });
+      const values = band.lightBands(o); // integrals are cheap; live-tracks toggles
+      const peak = Math.max(values[0], values[1], values[2]);
+      if (peak > 0) {
+        o.color.setRGB(values[0] / peak, values[1] / peak, values[2] / peak);
+        o.intensity = peak;
+      } else {
+        o.color.setRGB(0, 0, 0);
+        o.intensity = 0;
+      }
+    });
+
     renderer.toneMapping = THREE.NoToneMapping;
-    renderer.setRenderTarget(fluxRT);
+    renderer.setRenderTarget(nirBandsRT);
     renderer.render(scene, camera);
+    renderer.setRenderTarget(fluxRT);
+    collapseQuad.render(renderer);
   } finally {
     renderer.setRenderTarget(prevTarget);
     renderer.toneMapping = prevTM;
@@ -270,6 +291,7 @@ function applySize() {
   canvas.style.height = "100vh";
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  if (nirBandsRT) nirBandsRT.setSize(w, h);
   if (fluxRT) fluxRT.setSize(w, h);
   infrared.setSize(w, h);
   if (nightshot) nightshot.setSize(w, h);
@@ -292,8 +314,8 @@ function hudText() {
   const P = activeIrCtx().P;
   const rt = mode === "nv" && realtime;
   return [
-    "TRUE-NIR NIGHT VISION — spectral tracer → Gen-3 intensifier",
-    `mode        ${mode === "nv" ? "NV (photocathode flux λ550–900)" : "VISIBLE (XYZ λ380–720)"}   [V]`,
+    "SPECTRAL NIR NIGHT VISION — tracer / 3-band raster → intensifier",
+    `mode        ${mode === "nv" ? "NV (relative response λ550–900)" : "VISIBLE (XYZ λ380–720)"}   [V]`,
     mode === "nv"
       ? `device      ${device === "tube" ? "Gen-3 tube (white phosphor)" : "Sony NightShot (CCD + tape path)"}   [N]`
       : "",
@@ -301,8 +323,9 @@ function hudText() {
       ? `tape        VHS ${nightshot.cam.ctx.P.analogStrength.value.toFixed(2)} [, .] · noise ${nightshot.cam.ctx.P.analogTapeNoise.value.toFixed(2)} [< >] · smear ${nightshot.ctx.P.smear.value.toFixed(2)} [; ']`
       : "",
     mode === "nv"
-      ? `render      ${rt ? "REALTIME — band-collapsed raster + shadow maps" : "PATH TRACED — 1 spp progressive"}   [R]`
+      ? `render      ${rt ? "REALTIME — 3-band NIR raster + shadow maps" : "PATH TRACED — 1 spp progressive"}   [R]`
       : "",
+    `electrons   ${electronModelOn ? "ON" : "OFF"} — tube only, ${ELECTRON_PROFILE.electronsPerUnit} e/unit   [E]`,
     `IR illum    ${irOn ? "ON — 850 nm, black in RGB" : "OFF"}   [I]`,
     `tube exp    ${P.exposure.value.toFixed(2)} stops   [ / ]`,
     `input γ     ${P.inputGamma.value.toFixed(2)}   - / =`,
@@ -328,26 +351,41 @@ async function init() {
   infrared = new InfraredPipeline(renderer);
   applyInfraredPreset(infrared.ctx, INFRARED_PRESETS.white_phosphor_nir);
   infrared.setInputMode("nir");
+  infrared.setElectronModel(ELECTRON_PROFILE);
   infrared.setHaloDisc(true);
 
   nightshot = new NightshotPipeline(renderer);
   applyNightshotPreset(nightshot, NIGHTSHOT_PRESETS.nightshot_plus);
   nightshot.ir.setInputMode("nir");
 
-  fluxRT = new THREE.RenderTarget(1, 1, {
+  const targetOptions = {
     type: THREE.HalfFloatType,
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
-    // the realtime path rasters real geometry into this target — it needs a
-    // z-buffer (the tracer's fullscreen blit ignores it: depthTest false)
-    depthBuffer: true,
     colorSpace: THREE.NoColorSpace,
-  });
+  };
+  nirBandsRT = new THREE.RenderTarget(1, 1, { ...targetOptions, depthBuffer: true });
+  fluxRT = new THREE.RenderTarget(1, 1, { ...targetOptions, depthBuffer: false });
+
+  const bands = texture(nirBandsRT.texture, screenUV).rgb;
+  const weights = vec3(band.weights[0], band.weights[1], band.weights[2]);
+  const flux = dot(bands, weights).max(0.0);
+  const collapseMaterial = new THREE.MeshBasicNodeMaterial();
+  collapseMaterial.colorNode = vec4(flux, flux, flux, 1.0);
+  collapseMaterial.depthTest = false;
+  collapseMaterial.depthWrite = false;
+  collapseMaterial.toneMapped = false;
+  collapseQuad = new THREE.QuadMesh(collapseMaterial);
 
   tracer = createSpectralTracer({
     renderer, scene, camera,
     enabled: USE_TRACER,
-    onStatus: (s) => { statusLine = String(s).replace(/^max\.js - /, ""); console.log(s); },
+    onStatus: (s) => {
+      statusLine = String(s)
+        .replace(/^max\.js - /, "")
+        .replace("photocathode flux", "photocathode response");
+      console.log(s);
+    },
     onError: (e) => { statusLine = `ERROR ${e?.message || e}`; console.error(e); },
   });
   tracer.setNvTarget(fluxRT);
@@ -369,6 +407,10 @@ async function init() {
     if (e.key === "v" || e.key === "V") setMode(mode === "nv" ? "visible" : "nv");
     if (e.key === "n" || e.key === "N") device = device === "tube" ? "nightshot" : "tube";
     if (e.key === "r" || e.key === "R") realtime = !realtime;
+    if (e.key === "e" || e.key === "E") {
+      electronModelOn = !electronModelOn;
+      infrared.setElectronModel(electronModelOn ? ELECTRON_PROFILE : false);
+    }
     if (e.key === "i" || e.key === "I") {
       irOn = !irOn;
       irLight.intensity = irOn ? 70 : 0;
@@ -398,7 +440,8 @@ async function init() {
 
     const imager = device === "nightshot" ? nightshot : infrared;
     if (mode === "nv" && realtime) {
-      // realtime path: raster the collapsed NIR band, imager on top. The
+      // realtime path: raster three NIR bands, collapse to relative sensor
+      // response, then run the imager. The
       // camera-mounted IR beam follows the rig with no rebake, no reset.
       renderNirRealtime();
       if (USE_TUBE) imager.renderTexture(fluxRT.texture, frame, { dt });

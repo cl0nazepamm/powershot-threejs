@@ -47,10 +47,11 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "check": "node --check src/index.js && node --check src/main.js && node --check src/pipeline.js && node --check src/presets.js && node --check src/film.js && node --check src/infrared.js && node --check src/nightshot.js && node --check src/render-pipeline.js && node --check src/nv-demo.js && node --check src/nir_band.js"
+    "check": "node --check src/index.js && node --check src/main.js && node --check src/pipeline.js && node --check src/presets.js && node --check src/film.js && node --check src/infrared.js && node --check src/nightshot.js && node --check src/render-pipeline.js && node --check src/nv-demo.js && node --check src/nir_band.js",
+    "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {
-    "speedball-gi": "^0.5.0",
+    "speedball-gi": "^0.6.3",
     "three": "^0.185.0",
     "three-mesh-bvh": "^0.9.10",
     "vite": "^8.0.16"

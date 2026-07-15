@@ -6,10 +6,11 @@
 // a real temporal auto-brightness-control loop, resolution-limited optics,
 // sparse photon scintillation, and a phosphor screen.
 //
-// It works in a single scalar "electron-flux" channel L in scene-linear 0..1+.
-// The flux is resolved ONCE per frame into a full-resolution single-channel
-// prepass target (either simulated from RGB, or read directly from a true-NIR
-// render such as a spectral tracer's photocathode-flux output). Everything
+// It works in a single scalar relative-response channel L in scene-linear 0..1+.
+// The response is resolved ONCE per frame into a full-resolution single-channel
+// prepass target (either simulated from RGB, or read from a spectral renderer).
+// An opt-in relative-electron model can quantize that response before the tube
+// gain stages; default rgb/nir behavior remains unchanged. Everything
 // downstream - PSF, adaptation analysis, halo, ABC, develop - reads that
 // target, so the source is decoded in exactly one place. The shipped look is
 // a high-end white-phosphor tube.
@@ -62,13 +63,42 @@ function gaussTemporal(p, t, salt) {
   return sqrt(log(u1).mul(-2.0)).mul(cos(u2.mul(6.2831853)));
 }
 
+// Convert relative response to a stochastic photoelectron observation, then
+// normalize back into the signal range expected by the existing tube stages.
+// The low-count branch uses an inverse Poisson CDF; the bright branch uses a
+// Cornish-Fisher corrected Gaussian approximation. This is compiled only when
+// setElectronModel(...) is enabled.
+function relativeElectronSample(signal, ctx, salt) {
+  const P = ctx.P;
+  const scale = P.electronsPerUnit.max(1.0);
+  const mean = signal.max(0.0).mul(scale);
+  const cell = floor(screenUV.mul(ctx.resolution).div(ctx.grainScale.max(1.0)));
+  const random = hash13(vec3(cell.x, cell.y, ctx.frame.add(salt))).max(1e-6);
+  let probability = exp(mean.negate());
+  let cumulative = probability;
+  let discrete = float(0.0);
+  for (let k = 1; k < 24; k += 1) {
+    discrete = discrete.add(step(cumulative, random));
+    probability = probability.mul(mean).div(k);
+    cumulative = cumulative.add(probability);
+  }
+  const z = gaussTemporal(cell, ctx.frame, salt + 17.0);
+  const gaussian = floor(mean
+    .add(z.mul(sqrt(mean.max(1e-6))))
+    .add(z.mul(z).sub(1.0).div(6.0))
+    .add(0.5))
+    .max(0.0);
+  const observed = mix(discrete, gaussian, step(8.0, mean)).div(scale);
+  return mix(signal, observed, P.noiseAmount.clamp(0.0, 1.0));
+}
+
 // --- Stage 1: GaAs photocathode spectral response -------------------------
 // Fake the NIR-weighted response of a Gen-3 photocathode from an RGB frame
 // (which carries no real NIR): rising red>green>blue quantum efficiency, a
 // chlorophyll "Wood effect" foliage glow, a waxy skin lift, and suppression of
-// blue sky / open water toward black. Returns the scalar electron flux.
+// blue sky / open water toward black. Returns a scalar relative response.
 //
-// This is the raster FALLBACK. When a true photocathode-flux input is
+// This is the raster FALLBACK. When a linear NIR-response input is
 // available (a spectral tracer's NIR channel), use setInputMode("nir") and the
 // prepass reads the flux directly instead - RGB carries zero information about
 // NIR (metamerism), so no heuristic can recover it.
@@ -109,14 +139,14 @@ function fluxInputTrim(flux, ctx) {
 }
 
 // --- Stage 0: NIR prepass ---------------------------------------------------
-// Resolve the scalar electron flux once per frame into a full-res target.
+// Resolve the scalar relative response once per frame into a full-res target.
 // Every later stage reads this texture, so input decode happens exactly here
 // (the spectral heuristic used to be re-evaluated ~7x per pixel: 5 PSF taps +
 // the sharp read + the analysis pass).
 function stNirPrepass(srcTex, ctx, { inputMode, inputEncoding }) {
   const P = ctx.P;
   if (inputMode === "nir") {
-    // True photocathode flux (e.g. a spectral tracer's NIR accumulation
+    // Linear photocathode response (e.g. a spectral tracer's NIR accumulation
     // channel): a raw single-channel LINEAR read - no sRGB decode, no luma
     // dot. fluxScale calibrates the renderer's flux range onto the range the
     // tube presets were tuned for.
@@ -212,7 +242,7 @@ function sparkleAt(cell, fphase, L, ctx) {
   return fire.mul(amp).mul(ride);
 }
 
-function scintillation(L, ctx) {
+function scintillation(L, ctx, includeShotNoise = true) {
   const P = ctx.P;
   // scintGrain is specified in TUBE pixels (~1280x960); grainScale (derived in
   // setSize) keeps sparkles ~one resolution element on larger canvases.
@@ -222,7 +252,9 @@ function scintillation(L, ctx) {
 
   // Continuous shot fizz: absolute noise ~ sqrt(signal), so relative noise falls
   // as the surface brightens (correct Poisson / high-SNR behaviour).
-  const shot = gaussTemporal(cell, f, 37.0).mul(sqrt(L.add(P.ebi)).mul(P.shotStrength));
+  const shot = includeShotNoise
+    ? gaussTemporal(cell, f, 37.0).mul(sqrt(L.add(P.ebi)).mul(P.shotStrength))
+    : float(0.0);
 
   // Sparse sparkle with a STATELESS phosphor "boil": because each frame's field
   // is a pure function of (cell, frame), we recompute the two previous frames and
@@ -320,7 +352,10 @@ function stAbcUpdate(analysisTex, gainPrevTex, ctx) {
   return vec4(mix(prev, target, k), 0.0, 0.0, 1.0);
 }
 
-function stDevelop(srcTex, nirTex, ctx, analysisTex, abcGainTex, eyeMaskTex, stages, outputEncoding) {
+function stDevelop(
+  srcTex, nirTex, ctx, analysisTex, abcGainTex, eyeMaskTex,
+  stages, outputEncoding, electronModel,
+) {
   const P = ctx.P;
   const sourceSample = texture(srcTex, screenUV);
   const nirSharp = texture(nirTex, screenUV).r; // sharp, for eye local contrast
@@ -328,6 +363,7 @@ function stDevelop(srcTex, nirTex, ctx, analysisTex, abcGainTex, eyeMaskTex, sta
 
   // 1+7: photocathode signal, resolution-limited (soft).
   let signal = softNir(nirTex, ctx, screenUV);
+  if (electronModel) signal = relativeElectronSample(signal, ctx, 71.0);
 
   // 3: adaptation - local shading (same-frame tone mapping of the blurred local
   // mean, reduced) x global ABC breathing (temporal loop, 1x1 state target).
@@ -349,7 +385,9 @@ function stDevelop(srcTex, nirTex, ctx, analysisTex, abcGainTex, eyeMaskTex, sta
   // 2: EBI self-glow floor - lifts blacks into a faint glowing grey so noise has
   // something to ride on (what you see with the lens cap on). Post-adaptation,
   // pre-MCP: it still rides the MCP gain, as in a real tube.
-  signal = signal.add(P.ebi);
+  let background = P.ebi;
+  if (electronModel) background = relativeElectronSample(P.ebi, ctx, 131.0);
+  signal = signal.add(background);
 
   // 4: MCP gain + Naka-Rushton transfer - constant-gain region, saturation knee,
   // and a hard ceiling (maxOutput). The phosphor is linear, so no extra gamma.
@@ -388,7 +426,9 @@ function stDevelop(srcTex, nirTex, ctx, analysisTex, abcGainTex, eyeMaskTex, sta
   // 8+9: device-locked chicken-wire, then sparse scintillation on top.
   if (stages.noise) {
     signal = signal.mul(hexGain(ctx, screenUV, signal));
-    signal = signal.add(scintillation(signal, ctx)).max(P.ebi.mul(0.5));
+    // Electron mode already supplies input shot noise; retain only the MCP-like
+    // sparse events here so the same variance is not added twice.
+    signal = signal.add(scintillation(signal, ctx, !electronModel)).max(P.ebi.mul(0.5));
   }
 
   // 10: eyepiece shading - circular field-stop vignette + centre hotspot only.
@@ -446,8 +486,12 @@ export function makeInfraredUniforms() {
       // scene-linear; <1 flattens grey/green mids, >1 steepens them.
       inputGamma: uniform(1.0),
       nirInput: uniform(0.0),
-      // true-NIR flux calibration (setInputMode("nir") path only)
+      // Linear NIR-response calibration (setInputMode("nir") path only)
       fluxScale: uniform(1.0),
+      // Optional relative-electron front end. This is the expected
+      // photoelectron count for input signal 1.0; P.ebi supplies the existing
+      // input-referred dark background and is sampled independently.
+      electronsPerUnit: uniform(1024.0),
       spectralMix: uniform(new THREE.Vector3(0.50, 0.40, 0.10)),
       redReflectance: uniform(0.25),
       greenReflectance: uniform(0.65),
@@ -601,7 +645,7 @@ export const INFRARED_PRESETS = {
     hotspot: 0.055,
     persistence: 0.42,
   },
-  // Tuned for a TRUE photocathode-flux input (setInputMode("nir") fed by a
+  // Tuned for a linear relative-response input (setInputMode("nir") fed by a
   // spectral tracer's NIR channel): linear flux with far hotter dynamic range
   // than the RGB heuristic - unclamped Planck-tail sources, unlit night ground
   // around 0.02-0.05 flux. The RGB-heuristic spectral controls are inert on
@@ -789,8 +833,9 @@ export class InfraredPipeline {
     this.eyeMask = null;
     this.size = { w: 0, h: 0 };
     // "rgb": simulate NIR from an RGB frame. "nir": the source IS linear
-    // photocathode flux (single channel) - read raw, no decode, no heuristic.
+    // photocathode response (single channel) - read raw, no decode, no heuristic.
     this.inputMode = "rgb";
+    this.electronModel = false;  // opt-in; default shaders remain unchanged
     this.inputEncoding = "srgb";   // decode applied to "rgb" sources
     this.outputEncoding = "srgb";  // "linear" for a handoff into a post stack
     this.haloDisc = false;         // Vogel-disc halo profile (see stAnalysisBlur)
@@ -834,14 +879,44 @@ export class InfraredPipeline {
     this.dirty = true;
   }
 
-  // "rgb" (default): simulate NIR from RGB. "nir": treat the source as true
-  // linear photocathode flux (e.g. a spectral tracer's NIR channel).
+  // "rgb" (default): simulate NIR from RGB. "nir": treat the source as a
+  // linear photocathode response (e.g. a spectral tracer's NIR channel).
   setInputMode(mode) {
     const next = mode === "nir" ? "nir" : "rgb";
     if (this.inputMode === next) return;
     this.inputMode = next;
     this.ctx.P.nirInput.value = next === "nir" ? 1 : 0;
     this.dirty = true;
+  }
+
+  // Opt-in relative-electron shot-noise model. This never changes Speedball GI
+  // or the default rgb/nir path; disabling it removes the model at graph build.
+  setElectronModel(options = false) {
+    const enabled = options === true || (
+      options && typeof options === "object" && options.enabled !== false
+    );
+    let changed = enabled !== this.electronModel;
+    if (options && typeof options === "object") {
+      const requestedScale = Number(options.electronsPerUnit);
+      if (Number.isFinite(requestedScale)) {
+        const value = Math.min(1e6, Math.max(1, requestedScale));
+        if (this.ctx.P.electronsPerUnit.value !== value) {
+          this.ctx.P.electronsPerUnit.value = value;
+          changed = true;
+        }
+      }
+    }
+    if (!changed) return;
+    this.electronModel = enabled;
+    this.clearHistory();
+    this.dirty = true;
+  }
+
+  getElectronModel() {
+    return {
+      enabled: this.electronModel,
+      electronsPerUnit: this.ctx.P.electronsPerUnit.value,
+    };
   }
 
   // Encoding of an "rgb" source: "srgb" (default - typical canvas/video input)
@@ -931,7 +1006,7 @@ export class InfraredPipeline {
       this.abcInitMat = this._mat(vec4(1.0, 0.0, 0.0, 1.0));
     }
 
-    // Stage 0: resolve electron flux once into the full-res prepass target.
+    // Stage 0: resolve relative response once into the full-res prepass target.
     this.steps.push({
       material: this._mat(stNirPrepass(this.source, this.ctx, {
         inputMode: this.inputMode,
@@ -982,6 +1057,7 @@ export class InfraredPipeline {
         this.eyeMask,
         stages,
         this.outputEncoding,
+        this.electronModel,
       ),
     );
     this.developMat.transparent = true;

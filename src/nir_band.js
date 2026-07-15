@@ -1,20 +1,15 @@
-// nir_band.js — band-collapse of the spectral NIR domain for REALTIME render.
+// nir_band.js — three-band approximation of the spectral NIR domain.
 //
-// The spectral tracer exists because materials and lights need NIR values that
-// RGB doesn't carry. But once integrated against the photocathode response,
-// every material and light collapses to ONE exact scalar:
+// Materials and emitters cannot be collapsed independently before lighting:
 //
-//   lightFlux    = ∫ e(λ)·S(λ) dλ / ∫S      (per light, per emitter class)
-//   reflectance  = ∫ R(λ)·S(λ) dλ / ∫S      (per material: authored nirAlbedo
-//                                            or JH-extrapolated spectrum)
+//   average(E) * average(R) != average(E * R)
 //
-// Rendering that single band with a plain rasterizer (monochrome albedos,
-// white lights at the collapsed intensity, shadow maps) reproduces the
-// tracer's DIRECT term exactly — three's punctual-light model is the same
-// albedo/π·n·l·atten the tracer's NEE uses. What's lost vs the path tracer:
-// indirect bounces and dispersion. What's gained: zero Monte Carlo noise at
-// full framerate — and the tube re-noises the image with CORRECT statistics
-// anyway. Authenticity lives in the spectra; they are integrated exactly here.
+// Instead, RGB temporarily carries three NIR bands. Three's regular lighting
+// multiplies material and emitter values within each band, then a fullscreen
+// pass collapses the lit result through the photocathode band weights. This is
+// still an approximation (three broad bands, raster BRDF, no indirect bounce),
+// but it preserves the material/emitter spectral correlation that the old
+// single-scalar path discarded.
 
 import {
   photocathodeResponseJS, NV_LAMBDA_MIN, NV_LAMBDA_MAX,
@@ -27,6 +22,12 @@ const L1 = NV_LAMBDA_MAX;
 const STEPS = 1400;
 const DL = (L1 - L0) / STEPS;
 
+export const NIR_BAND_RANGES = Object.freeze([
+  Object.freeze([L0, 650]),
+  Object.freeze([650, 800]),
+  Object.freeze([800, L1]),
+]);
+
 // visible anchor for JH normalization (matches spectral_traverse jhEval)
 const JH_MIN = 380.0;
 const JH_RANGE = 340.0;
@@ -36,16 +37,37 @@ function smoothstep(e0, e1, x) {
   return t * t * (3 - 2 * t);
 }
 
-// ∫f(λ)S(λ)dλ / ∫S(λ)dλ over the NV domain
-function weighted(f) {
+// ∫f(λ)S(λ)dλ / ∫S(λ)dλ over one band.
+function weightedRange(f, from, to) {
   let num = 0, den = 0;
-  for (let i = 0; i < STEPS; i += 1) {
-    const l = L0 + (i + 0.5) * DL;
+  const steps = Math.max(1, Math.round((to - from) / DL));
+  const dl = (to - from) / steps;
+  for (let i = 0; i < steps; i += 1) {
+    const l = from + (i + 0.5) * dl;
     const s = photocathodeResponseJS(l);
-    num += f(l) * s;
-    den += s;
+    num += f(l) * s * dl;
+    den += s * dl;
   }
   return den > 0 ? num / den : 0;
+}
+
+function responseIntegral(from, to) {
+  let sum = 0;
+  const steps = Math.max(1, Math.round((to - from) / DL));
+  const dl = (to - from) / steps;
+  for (let i = 0; i < steps; i += 1) {
+    sum += photocathodeResponseJS(from + (i + 0.5) * dl) * dl;
+  }
+  return sum;
+}
+
+const totalResponse = responseIntegral(L0, L1);
+export const NIR_BAND_WEIGHTS = Object.freeze(NIR_BAND_RANGES.map(
+  ([from, to]) => responseIntegral(from, to) / totalResponse,
+));
+
+function integrateBands(f) {
+  return NIR_BAND_RANGES.map(([from, to]) => weightedRange(f, from, to));
 }
 
 // ── CPU mirror of the GPU Jakob–Hanika evaluation ───────────────────
@@ -100,23 +122,20 @@ function makeJh() {
   };
 
   return {
-    // photocathode-weighted reflectance of an sRGB-linear color
-    reflectance(r, g, b) {
+    reflectanceAt(r, g, b, l) {
       const rc = Math.min(1, Math.max(0, r));
       const gc = Math.min(1, Math.max(0, g));
       const bc = Math.min(1, Math.max(0, b));
-      if (!data) return weighted((l) => tent(rc, gc, bc, l));
+      if (!data) return tent(rc, gc, bc, l);
       const co = coeffs(rc, gc, bc);
-      return weighted((l) => evalAt(co, l));
+      return evalAt(co, l);
     },
-    // photocathode-weighted emission of an unbounded linear color (JH shape × max)
-    emission(r, g, b, shape = null) {
+    // JH shape times the unbounded linear RGB magnitude.
+    emissionAt(r, g, b, l) {
       const m = Math.max(r, g, b);
       if (m <= 0) return 0;
-      const f = !data
-        ? (l) => tent(r / m, g / m, b / m, l)
-        : ((co) => (l) => evalAt(co, l))(coeffs(r / m, g / m, b / m));
-      return m * weighted(shape ? (l) => f(l) * shape(l) : f);
+      if (!data) return m * tent(r / m, g / m, b / m, l);
+      return m * evalAt(coeffs(r / m, g / m, b / m), l);
     },
   };
 }
@@ -129,6 +148,8 @@ function planckRatio(l, T) {
   return ((560 / l) ** 5) * (Math.exp(C2 / (560 * T)) - 1) / (Math.exp(C2 / (l * T)) - 1);
 }
 const gauss = (mu, sigma) => (l) => Math.exp(-0.5 * ((l - mu) / sigma) ** 2);
+const sodiumSpectrum = gauss(589, 4);
+const irSpectrum = gauss(850, 15);
 
 function emitterClassOf(light) {
   const raw = light.userData?.emitterClass;
@@ -146,58 +167,76 @@ function emitterClassOf(light) {
 
 export function createNirBand() {
   const jh = makeJh();
-  const SINT_IR = weighted(gauss(850, 15));    // IR band: peak = intensity (matches GPU)
-  const SINT_NA = weighted(gauss(589, 4));
+
+  const collapse = (values) => values.reduce(
+    (sum, value, i) => sum + value * NIR_BAND_WEIGHTS[i], 0,
+  );
 
   return {
-    // scalar NIR reflectance of a material: authored > classifier > JH prior
-    reflectance(material) {
+    ranges: NIR_BAND_RANGES,
+    weights: NIR_BAND_WEIGHTS,
+    collapse,
+
+    // Per-band reflectance. Authored/classified NIR truth is blended across
+    // 700..740 nm exactly like speedball's path tracer; visible-red response
+    // below that edge remains the JH reconstruction.
+    reflectanceBands(material) {
       const ud = material.userData?.nirAlbedo;
-      if (Number.isFinite(ud)) return Math.min(1, Math.max(0, ud));
       const c = material.color;
       const r = c?.isColor ? c.r : 1, g = c?.isColor ? c.g : 1, b = c?.isColor ? c.b : 1;
       const rough = Number.isFinite(material.roughness) ? material.roughness : 1;
       const metal = Number.isFinite(material.metalness) ? material.metalness : 0;
       const trans = Number.isFinite(material.transmission) ? material.transmission : 0;
-      const tagged = classifyNir(material.name, r, g, b, rough, metal, trans);
-      if (tagged >= 0) return tagged;
-      return jh.reflectance(r, g, b);
+      const tagged = Number.isFinite(ud)
+        ? Math.min(1, Math.max(0, ud))
+        : classifyNir(material.name, r, g, b, rough, metal, trans);
+      return integrateBands((l) => {
+        const base = jh.reflectanceAt(r, g, b, l);
+        if (tagged < 0) return base;
+        const blend = smoothstep(700, 740, l);
+        return base + (tagged - base) * blend;
+      });
     },
 
-    // scalar NIR emissive of a material (linear emissive × intensity, JH prior)
-    emissiveFlux(material) {
+    emissiveBands(material) {
       const e = material.emissive;
-      if (!e?.isColor) return 0;
+      if (!e?.isColor) return [0, 0, 0];
       const k = Number.isFinite(material.emissiveIntensity) ? material.emissiveIntensity : 1;
-      return jh.emission(e.r * k, e.g * k, e.b * k);
+      return integrateBands((l) => jh.emissionAt(e.r * k, e.g * k, e.b * k, l));
     },
 
-    // absolute NIR flux of a light (includes color × intensity), per class —
-    // integrates the exact same spectra emitterAtLambda emits on the GPU
-    lightFlux(light) {
+    // Per-band relative radiance, including light intensity. The emitter
+    // functions mirror speedball's GPU path; no absolute radiometric units are
+    // implied by Three's light intensity.
+    lightBands(light) {
       const k = Number.isFinite(light.intensity) ? light.intensity : 1;
-      if (k <= 0) return 0;
+      if (k <= 0) return [0, 0, 0];
       const c = light.color;
       const r = (c?.isColor ? c.r : 1) * k;
       const g = (c?.isColor ? c.g : 1) * k;
       const b = (c?.isColor ? c.b : 1) * k;
       const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      let spectrum;
       switch (emitterClassOf(light)) {
         case 1: {
           const T = Math.min(20000, Math.max(500,
             Number.isFinite(light.userData?.colorTemp) ? light.userData.colorTemp : 2856));
-          return lum * weighted((l) => planckRatio(l, T));
+          spectrum = (l) => lum * planckRatio(l, T);
+          break;
         }
         case 2:
-          return jh.emission(r, g, b, (l) => 1 - smoothstep(690, 725, l));
+          spectrum = (l) => jh.emissionAt(r, g, b, l) * (1 - smoothstep(690, 725, l));
+          break;
         case 3:
-          return lum * SODIUM_Y_SCALE * SINT_NA;
+          spectrum = (l) => lum * SODIUM_Y_SCALE * sodiumSpectrum(l);
+          break;
         case 4:
-          // RGB is meaningless for an IR illuminator; intensity = band peak.
-          return Math.max(Math.max(r, g, b), k) * SINT_IR;
+          spectrum = (l) => Math.max(Math.max(r, g, b), k) * irSpectrum(l);
+          break;
         default:
-          return jh.emission(r, g, b);
+          spectrum = (l) => jh.emissionAt(r, g, b, l);
       }
+      return integrateBands(spectrum);
     },
   };
 }
