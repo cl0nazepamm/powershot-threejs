@@ -589,6 +589,7 @@ function stAnalogVhs(tex, ctx) {
   const t = ctx.frame.mul(0.037);
   const strength = ctx.P.analogStrength.clamp(0.0, 3.0);
   const tracking = ctx.P.analogTracking.clamp(0.0, 3.0);
+  const trackingChoppiness = ctx.P.analogTrackingChoppiness.clamp(0.0, 1.0);
   const chromaBleed = ctx.P.analogChromaBleed.clamp(0.0, 3.0);
   const ringing = ctx.P.analogRinging.clamp(0.0, 3.0);
   const tapeNoise = ctx.P.analogTapeNoise.clamp(0.0, 3.0);
@@ -601,7 +602,34 @@ function stAnalogVhs(tex, ctx) {
   const fieldLine = floor(p.y.div(2.0));
 
   const rowNoise = hash12(vec2(p.y.mul(0.37), floor(t.mul(29.0))).add(13.7)).sub(0.5);
-  const lineWave = sin(p.y.mul(0.073).add(t.mul(5.3))).add(sin(p.y.mul(0.019).sub(t.mul(2.1))).mul(0.55));
+  // Tracking timing errors stay correlated for a few scanlines, but should not
+  // form broad, liquid sine lobes across most of the picture.
+  const trackingCoord = fieldLine.mul(0.5);
+  const trackingCell = floor(trackingCoord);
+  const trackingFrac = fract(trackingCoord);
+  const trackingEase = trackingFrac.mul(trackingFrac).mul(float(3.0).sub(trackingFrac.mul(2.0)));
+  const trackingTime = ctx.frame.mul(0.08);
+  const trackingTimeCell = floor(trackingTime);
+  const trackingTimeFrac = fract(trackingTime);
+  const trackingTimeEase = trackingTimeFrac.mul(trackingTimeFrac)
+    .mul(float(3.0).sub(trackingTimeFrac.mul(2.0)));
+  const trackingNow = mix(
+    hash12(vec2(trackingCell, trackingTimeCell).add(151.0)),
+    hash12(vec2(trackingCell.add(1.0), trackingTimeCell).add(151.0)),
+    trackingEase,
+  );
+  const trackingNext = mix(
+    hash12(vec2(trackingCell, trackingTimeCell.add(1.0)).add(151.0)),
+    hash12(vec2(trackingCell.add(1.0), trackingTimeCell.add(1.0)).add(151.0)),
+    trackingEase,
+  );
+  const steppedLineWave = quantize(
+    mix(trackingNow, trackingNext, trackingTimeEase).sub(0.5).mul(3.0),
+    0.25,
+  );
+  const smoothLineWave = sin(p.y.mul(0.073).add(t.mul(5.3)))
+    .add(sin(p.y.mul(0.019).sub(t.mul(2.1))).mul(0.55));
+  const lineWave = mix(smoothLineWave, steppedLineWave, trackingChoppiness);
   const headDrift = sin(ctx.frame.mul(0.021)).mul(0.018)
     .add(hash12(vec2(floor(ctx.frame.mul(0.037)), 8.1)).sub(0.5).mul(0.014));
   const headY = float(0.84).add(headDrift).clamp(0.78, 0.93);
@@ -1032,7 +1060,7 @@ export function makeUniforms() {
       vignette: uniform(0), eeGain: uniform(0), eeThresh: uniform(0),
       jpegQuality: uniform(60), jpegStrength: uniform(0.2), jpegChroma420: uniform(0.75),
       jpegMidtone: uniform(0.45), jpegHighlight: uniform(1.0),
-      analogStrength: uniform(0.65), analogTracking: uniform(0.45),
+      analogStrength: uniform(0.65), analogTracking: uniform(0.45), analogTrackingChoppiness: uniform(1.0),
       analogChromaBleed: uniform(0.75), analogRinging: uniform(0.65), analogTapeNoise: uniform(0.75),
       analogBandMask: uniform(0.35), analogEdgeWave: uniform(0.35), analogDropouts: uniform(0.35), analogScanlines: uniform(0.55),
       analogHeadSwitch: uniform(0.45),
@@ -1085,6 +1113,7 @@ export function applyPreset(ctx, preset) {
   P.jpegHighlight.value = 1.0;
   P.analogStrength.value = preset.analog_vhs_strength ?? 0.65;
   P.analogTracking.value = preset.analog_tracking ?? 0.45;
+  P.analogTrackingChoppiness.value = preset.analog_tracking_choppiness ?? 1.0;
   P.analogChromaBleed.value = preset.analog_chroma_bleed ?? 0.75;
   P.analogRinging.value = preset.analog_ringing ?? 0.65;
   P.analogTapeNoise.value = preset.analog_tape_noise ?? 0.75;

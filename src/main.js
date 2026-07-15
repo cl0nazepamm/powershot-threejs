@@ -112,6 +112,8 @@ const els = {
   analogval: document.getElementById("analogval"),
   tracking: document.getElementById("tracking"),
   trackingval: document.getElementById("trackingval"),
+  trackingchoppiness: document.getElementById("trackingchoppiness"),
+  trackingchoppinessval: document.getElementById("trackingchoppinessval"),
   chromableed: document.getElementById("chromableed"),
   chromableedval: document.getElementById("chromableedval"),
   ringing: document.getElementById("ringing"),
@@ -358,6 +360,11 @@ function wireInput() {
     pipeline.ctx.P.analogTracking.value = v;
     els.trackingval.textContent = v.toFixed(2);
   });
+  els.trackingchoppiness.addEventListener("input", () => {
+    const v = els.trackingchoppiness.value / 100;
+    pipeline.ctx.P.analogTrackingChoppiness.value = v;
+    els.trackingchoppinessval.textContent = v.toFixed(2);
+  });
   els.chromableed.addEventListener("input", () => {
     const v = els.chromableed.value / 100;
     pipeline.ctx.P.analogChromaBleed.value = v;
@@ -595,6 +602,9 @@ function syncEffectUI() {
 
   const tracking = pipeline.ctx.P.analogTracking.value;
   setSlider(els.tracking, els.trackingval, tracking);
+
+  const trackingChoppiness = pipeline.ctx.P.analogTrackingChoppiness.value;
+  setSlider(els.trackingchoppiness, els.trackingchoppinessval, trackingChoppiness);
 
   const chromaBleed = pipeline.ctx.P.analogChromaBleed.value;
   setSlider(els.chromableed, els.chromableedval, chromaBleed);

@@ -195,6 +195,7 @@ Useful controls:
 - `powershot.ctx.noiseScale.value` - global noise scale.
 - `powershot.ctx.P.jpegStrength.value` - digital JPEG amount.
 - `powershot.ctx.P.analogStrength.value` - analog/VHS amount.
+- `powershot.ctx.P.analogTrackingChoppiness.value` - tracking-wave character (`0` = legacy smooth wave, `1` = short stepped timing errors).
 - `powershot.setOutputColorGrading({ brightness, contrast })` - post-effect corrective grade on linear colour (`powershotLinearGrade`: brightness = photographic gain, ±1 ≈ ±2 stops; contrast = power pivoted on 18% grey). Applied after the ISP / film print / phosphor — not as input exposure. Same API on `FilmPipeline` / `InfraredPipeline` / `NightshotPipeline` (nightshot forwards to its camera ISP).
 
 ## Structure
