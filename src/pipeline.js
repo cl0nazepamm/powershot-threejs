@@ -567,6 +567,15 @@ function yCbCrToRgb(c) {
   );
 }
 
+function softBand(value, start, end) {
+  return value.sub(start).div(end - start).clamp(0.0, 1.0);
+}
+
+function smoothBand(value, start, end) {
+  const t = softBand(value, start, end);
+  return t.mul(t).mul(float(3.0).sub(t.mul(2.0)));
+}
+
 function analogSampleYcc(tex, ctx, uv, pxOffset) {
   return rgbToYCbCr(texture(tex, uv.add(ctx.texel.mul(pxOffset))).rgb);
 }
@@ -577,6 +586,7 @@ function analogCarrier(p, fieldPhase) {
 
 function stAnalogVhs(tex, ctx) {
   const p = floor(screenUV.mul(ctx.resolution));
+  const t = ctx.frame.mul(0.037);
   const strength = ctx.P.analogStrength.clamp(0.0, 3.0);
   const tracking = ctx.P.analogTracking.clamp(0.0, 3.0);
   const chromaBleed = ctx.P.analogChromaBleed.clamp(0.0, 3.0);
@@ -590,91 +600,33 @@ function stAnalogVhs(tex, ctx) {
   const active = strength.mul(step(0.001, strength));
   const fieldLine = floor(p.y.div(2.0));
 
-  // Treat time-base errors as scanline events, not broad full-frame sine warps.
-  // Holding the seed for two renders approximates field-rate changes when the
-  // demo is rendering at 60 Hz.
-  const fieldFrame = floor(ctx.frame.mul(0.5));
-  const rowNoise = hash12(vec2(p.y.mul(0.73), fieldFrame).add(13.7)).sub(0.5);
-
-  // VHS edge wave is low-passed mechanical line jitter. Interpolate short
-  // four-field-line cells so it stays correlated without turning into a large
-  // smooth lobe across the whole picture.
-  const edgeCoord = fieldLine.mul(0.25);
-  const edgeCell = floor(edgeCoord);
-  const edgeFrac = fract(edgeCoord);
-  const edgeEase = edgeFrac.mul(edgeFrac).mul(float(3.0).sub(edgeFrac.mul(2.0)));
-  const edgeA = hash12(vec2(edgeCell, fieldFrame.mul(0.17)).add(41.0)).sub(0.5);
-  const edgeB = hash12(vec2(edgeCell.add(1.0), fieldFrame.mul(0.17)).add(41.0)).sub(0.5);
-  const edgeWave = mix(edgeA, edgeB, edgeEase).mul(edgeWaveAmount.mul(2.4));
-
-  // ntsc-rs confines tracking loss to a small bottom band. The displacement
-  // uses short-correlated row noise, grows towards the bottom, and snaps to
-  // half-pixels so enlarged low-resolution output reads as broken timing rather
-  // than a liquid warp.
-  const trackingRows = float(10.0).add(tracking.mul(4.0)).clamp(10.0, 22.0);
-  const trackingLine = p.y.sub(ctx.resolution.y.sub(trackingRows));
-  const trackingMask = step(0.0, trackingLine)
-    .mul(float(1.0).sub(step(trackingRows, trackingLine)));
-  const trackingDepth = trackingLine.add(1.0).div(trackingRows).clamp(0.0, 1.0)
-    .mul(trackingMask);
-  const trackingCoord = fieldLine.mul(0.5);
-  const trackingCell = floor(trackingCoord);
-  const trackingFrac = fract(trackingCoord);
-  const trackingEase = trackingFrac.mul(trackingFrac).mul(float(3.0).sub(trackingFrac.mul(2.0)));
-  const trackingA = hash12(vec2(trackingCell, fieldFrame).add(151.0)).sub(0.5);
-  const trackingB = hash12(vec2(trackingCell.add(1.0), fieldFrame).add(151.0)).sub(0.5);
-  const trackingWave = mix(trackingA, trackingB, trackingEase);
-  const trackingFine = hash12(vec2(p.y.mul(1.91), fieldFrame).add(167.0)).sub(0.5);
-  const trackingBreak = step(0.86, hash12(vec2(fieldLine.mul(3.17), fieldFrame).add(173.0)));
-  const trackingShiftPx = quantize(
-    trackingWave.mul(tracking.mul(14.0))
-      .add(trackingFine.mul(tracking.mul(3.0)))
-      .add(trackingFine.mul(trackingBreak).mul(tracking.mul(8.0)))
-      .mul(trackingDepth),
-    0.5,
-  );
-
-  // A real head switch is only a handful of bottom scanlines. ntsc-rs defaults
-  // to an 8-line window with a 3-line offset: five affected lines whose shift
-  // falls off with a 1.5-power curve. Keep it independent from Tracking so the
-  // Head switch control can produce the geometric tear on its own.
-  const headRows = float(8.0);
-  const headOffset = float(3.0);
-  const headAffectedRows = headRows.sub(headOffset);
-  const headLine = p.y.sub(ctx.resolution.y.sub(headAffectedRows));
-  const headInside = step(0.0, headLine)
-    .mul(float(1.0).sub(step(headAffectedRows, headLine)));
-  const headTopLine = headInside.mul(float(1.0).sub(step(1.0, headLine)));
-  const headMidJitter = hash12(vec2(fieldFrame, 4.7))
-    .add(hash12(vec2(fieldFrame, 17.3)))
-    .mul(0.5).sub(0.5).mul(0.06);
-  const headMidX = float(0.95).add(headMidJitter);
-  const headMidGate = step(headMidX, screenUV.x);
-  const headSampleMask = headInside.mul(
-    float(1.0).sub(headTopLine).add(headTopLine.mul(headMidGate)),
-  );
-  const headCurve = pow(
-    headAffectedRows.sub(headLine).add(headOffset).div(headRows).clamp(0.0, 1.0),
-    1.5,
-  ).mul(headSampleMask);
-  const headRowNoise = hash12(vec2(p.y.mul(2.37), fieldFrame).add(191.0)).sub(0.5);
-  const headShiftPx = quantize(
-    headCurve.mul(headSwitch.mul(72.0)).add(headRowNoise.mul(headSwitch)),
-    0.5,
-  ).mul(headSampleMask);
-  const headDamage = headInside.mul(headSwitch.mul(0.72).clamp(0.0, 1.0));
-  const trackingActiveMask = trackingMask.mul(step(0.001, tracking));
-  const headActiveMask = headSampleMask.mul(step(0.001, headSwitch));
-
-  const xJitterPx = rowNoise.mul(tracking.mul(0.35))
+  const rowNoise = hash12(vec2(p.y.mul(0.37), floor(t.mul(29.0))).add(13.7)).sub(0.5);
+  const lineWave = sin(p.y.mul(0.073).add(t.mul(5.3))).add(sin(p.y.mul(0.019).sub(t.mul(2.1))).mul(0.55));
+  const headDrift = sin(ctx.frame.mul(0.021)).mul(0.018)
+    .add(hash12(vec2(floor(ctx.frame.mul(0.037)), 8.1)).sub(0.5).mul(0.014));
+  const headY = float(0.84).add(headDrift).clamp(0.78, 0.93);
+  const belowHead = screenUV.y.sub(headY);
+  const afterHead = step(0.0, belowHead);
+  const headAttack = belowHead.div(0.012).clamp(0.0, 1.0);
+  const headFalloff = exp(belowHead.mul(-17.0)).mul(afterHead);
+  const headTail = float(1.0).sub(belowHead.div(0.22).clamp(0.0, 1.0)).mul(afterHead);
+  const headXFeather = smoothBand(screenUV.x, 0.012, 0.055)
+    .mul(float(1.0).sub(smoothBand(screenUV.x, 0.945, 0.988)));
+  const headMask = headAttack.mul(headFalloff.mul(0.8).add(headTail.mul(0.2)))
+    .mul(headXFeather)
+    .mul(headSwitch)
+    .clamp(0.0, 1.0);
+  const headNoise = hash12(vec2(fieldLine.mul(0.73), floor(t.mul(47.0))).add(91.3)).sub(0.5);
+  const headLineBreak = step(0.58, hash12(vec2(fieldLine.mul(1.91), floor(ctx.frame.mul(0.19))).add(117.0)));
+  const headPhaseShift = headNoise.mul(24.0).add(headLineBreak.mul(headNoise.mul(20.0)));
+  const edgeStep = hash12(vec2(fieldLine.mul(0.17), floor(ctx.frame.mul(0.09))).add(41.0)).sub(0.5);
+  const edgeWave = sin(fieldLine.mul(0.37).add(t.mul(1.7))).mul(edgeStep).mul(edgeWaveAmount.mul(1.65));
+  const xJitterPx = lineWave.mul(tracking.mul(0.85))
+    .add(rowNoise.mul(tracking.mul(2.0)))
     .add(edgeWave)
-    .add(trackingShiftPx)
-    .add(headShiftPx);
+    .add(headPhaseShift.mul(headMask.mul(tracking)))
+    .add(headNoise.mul(headMask.mul(tracking.mul(6.0))));
   const uv = screenUV.add(ctx.texel.mul(vec2(xJitterPx, 0.0)));
-  const displacementBoundary = step(1.0, uv.x)
-    .add(float(1.0).sub(step(0.0, uv.x)))
-    .clamp(0.0, 1.0)
-    .mul(trackingActiveMask.add(headActiveMask).clamp(0.0, 1.0));
 
   const base = rgbToYCbCr(texture(tex, uv).rgb);
   const left = analogSampleYcc(tex, ctx, uv, vec2(-1.0, 0.0));
@@ -714,9 +666,7 @@ function stAnalogVhs(tex, ctx) {
   y = y.add(crawl.mul(0.55));
 
   let chroma = mix(base.yz, chromaBlur, chromaBleed.mul(0.58).clamp(0.0, 0.9));
-  const phaseNoise = rowNoise.mul(chromaBleed.mul(0.22))
-    .add(trackingWave.mul(trackingDepth).mul(tracking.mul(0.10)))
-    .add(headRowNoise.mul(headDamage.mul(0.9)));
+  const phaseNoise = rowNoise.mul(chromaBleed.mul(0.22)).add(headNoise.mul(headMask.mul(0.65)));
   const phaseSin = sin(phaseNoise);
   const phaseCos = cos(phaseNoise);
   chroma = vec2(
@@ -731,7 +681,7 @@ function stAnalogVhs(tex, ctx) {
 
   const dropoutFrame = floor(ctx.frame.mul(0.13));
   const dropoutLineSeed = hash13(vec3(fieldLine.mul(2.37), dropoutFrame, 73.0));
-  const dropoutSegmentWidth = float(14.0).add(hash12(vec2(fieldLine, dropoutFrame).add(19.0)).mul(50.0));
+  const dropoutSegmentWidth = float(88.0).add(hash12(vec2(fieldLine, dropoutFrame).add(19.0)).mul(96.0));
   const dropoutSegment = floor(p.x.div(dropoutSegmentWidth));
   const dropoutSegmentSeed = hash13(vec3(
     dropoutSegment.mul(5.37).add(dropoutLineSeed.mul(17.0)),
@@ -741,75 +691,34 @@ function stAnalogVhs(tex, ctx) {
   const dropoutLineGate = step(float(1.0).sub(dropoutAmount.mul(0.075).clamp(0.0, 0.26)), dropoutLineSeed);
   const dropoutSegmentGate = step(float(1.0).sub(dropoutAmount.mul(0.32).clamp(0.0, 0.92)), dropoutSegmentSeed);
   const dropoutSegmentPos = fract(p.x.div(dropoutSegmentWidth).add(dropoutLineSeed));
-  // RF dropouts arrive with a hard leading edge and a short damped tail.
-  const dropoutSegmentEnvelope = pow(float(1.0).sub(dropoutSegmentPos), 2.0);
+  const dropoutSegmentEnvelope = softBand(dropoutSegmentPos, 0.04, 0.18)
+    .mul(float(1.0).sub(softBand(dropoutSegmentPos, 0.74, 0.96)));
   const dropoutBand = dropoutLineGate.mul(dropoutSegmentGate).mul(dropoutSegmentEnvelope);
   const bandDamage = dropoutAmount.mul(bandMask);
   const chromaLoss = dropoutBand.mul(bandDamage.mul(0.85)).clamp(0.0, 1.0);
   chroma = mix(chroma, chroma.mul(0.08), chromaLoss);
   const dropoutStatic = hash13(vec3(p.x.mul(0.91), p.y.mul(1.73), ctx.frame.add(12.0))).sub(0.5);
-  const dropoutPulse = cos(dropoutSegmentPos.mul(12.5663706).add(dropoutSegmentSeed.mul(3.1415927)))
-    .mul(0.65).add(dropoutStatic.mul(0.35));
-  y = y.add(dropoutBand.mul(dropoutPulse).mul(tapeNoise.mul(bandDamage).mul(30.0)));
+  y = y.add(dropoutBand.mul(dropoutStatic).mul(tapeNoise.mul(bandDamage).mul(34.0)));
 
-  const scan = mod(p.y, 2.0);
-  const interlace = step(0.5, mod(p.y.add(fieldFrame), 2.0));
-  y = y.mul(float(1.0).sub(scan.mul(scanlines.mul(0.042))).sub(interlace.mul(scanlines.mul(0.022))));
+  const scan = sin(p.y.mul(3.1415927)).mul(0.5).add(0.5);
+  const interlace = step(0.5, mod(p.y.add(ctx.frame), 2.0));
+  y = y.mul(float(1.0).sub(scan.mul(scanlines.mul(0.055))).sub(interlace.mul(scanlines.mul(0.025))));
   y = y.add(gaussTemporal(p, ctx.frame, 211.0).mul(tapeNoise.mul(1.6)));
 
-  // Tracking snow is sparse, short, and quadratic towards the bottom of the
-  // affected band, matching the transient distribution in ntsc-rs more closely
-  // than a blurred noise patch.
-  const trackingSnowSpan = float(8.0)
-    .add(hash12(vec2(fieldLine, fieldFrame).add(229.0)).mul(56.0));
-  const trackingSnowCoord = p.x.div(trackingSnowSpan)
-    .add(hash12(vec2(fieldLine, fieldFrame).add(233.0)));
-  const trackingSnowCell = floor(trackingSnowCoord);
-  const trackingSnowPos = fract(trackingSnowCoord);
-  const trackingSnowSeed = hash13(vec3(trackingSnowCell, fieldLine, fieldFrame.add(239.0)));
-  const trackingSnowGate = step(
-    float(0.97).sub(tracking.mul(0.03).clamp(0.0, 0.10)),
-    trackingSnowSeed,
-  ).mul(trackingDepth.mul(trackingDepth));
-  const trackingSnow = cos(trackingSnowPos.mul(9.424778).add(trackingSnowSeed.mul(3.1415927)))
-    .mul(pow(float(1.0).sub(trackingSnowPos), 2.0))
-    .mul(trackingSnowGate)
-    .mul(tracking);
-  const trackingHiss = gaussTemporal(p, ctx.frame, 257.0)
-    .mul(trackingDepth.mul(trackingDepth))
-    .mul(tracking.mul(1.4));
-  y = y.add(trackingSnow.mul(float(10.0).add(tapeNoise.mul(14.0))).add(trackingHiss));
-  const trackingChromaLoss = trackingBreak.mul(trackingDepth.mul(trackingDepth))
-    .mul(tracking.mul(0.22)).clamp(0.0, 0.85);
-  chroma = mix(chroma, chroma.mul(0.18), trackingChromaLoss);
-
-  // Optional mid-line switching starts near 95% width with triangular jitter
-  // and a 16-pixel cubic transient, as in ntsc-rs.
-  const headTransientPx = p.x.sub(headMidX.mul(ctx.resolution.x));
-  const headTransientPos = headTransientPx.div(16.0).clamp(0.0, 1.0);
-  const headTransientGate = step(0.0, headTransientPx)
-    .mul(float(1.0).sub(step(16.0, headTransientPx)))
-    .mul(headTopLine);
-  const headTransient = pow(float(1.0).sub(headTransientPos), 3.0)
-    .mul(headTransientGate).mul(headSwitch);
+  const headLine = float(1.0).sub(abs(belowHead).div(0.018).clamp(0.0, 1.0))
+    .mul(headXFeather)
+    .mul(headSwitch.mul(0.34));
   const headStatic = gaussTemporal(p, ctx.frame, 319.0).mul(0.62)
     .add(hash13(vec3(p.x.mul(0.31), p.y.mul(1.7), ctx.frame.mul(0.21))).sub(0.5));
-  const headLumaNoise = headStatic.mul(float(7.0).add(tapeNoise.mul(16.0)));
-  y = mix(
-    y,
-    y.mul(0.80).add(headLumaNoise).add(headTransient.mul(52.0)),
-    headDamage,
-  );
-  chroma = mix(
-    chroma,
-    chroma.mul(0.24).add(vec2(headStatic.mul(6.0), headRowNoise.mul(5.0))),
-    headDamage.mul(0.86),
-  );
+  const headLumaNoise = headStatic.mul(tapeNoise.mul(38.0)).mul(headMask);
+  const headLineNoise = headLineBreak.mul(hash12(vec2(p.x.mul(0.043), fieldLine.add(ctx.frame))).sub(0.5)).mul(headMask);
+  const headTear = headMask.clamp(0.0, 1.0);
+  y = mix(y, y.mul(0.72).add(headLumaNoise).add(headLineNoise.mul(48.0)).add(headLine.mul(42.0)), headTear.mul(0.72));
+  chroma = mix(chroma, chroma.mul(0.24).add(vec2(headStatic.mul(18.0), headNoise.mul(12.0))), headTear.mul(0.82));
 
-  // Render the uncovered edge of an actual shifted line as blanking instead of
-  // relying on the render target's clamp-to-edge sampler (or a fixed fake border).
-  y = mix(y, float(0.0), displacementBoundary);
-  chroma = mix(chroma, vec2(0.0), displacementBoundary);
+  const rightBorder = step(0.983, screenUV.x).mul(strength.mul(0.72).clamp(0.0, 1.0));
+  y = mix(y, y.mul(0.15), rightBorder);
+  chroma = mix(chroma, chroma.mul(0.1), rightBorder);
 
   const oversat = float(1.0).add(strength.mul(0.18));
   const analog = yCbCrToRgb(vec3(y, chroma.mul(oversat))).clamp(0.0, LEVELS);
