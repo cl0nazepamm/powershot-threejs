@@ -51,10 +51,10 @@
     "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {
-    "speedball-gi": "^0.6.3",
+    "speedball-gi": "^0.6.4",
     "three": "^0.185.0",
-    "three-mesh-bvh": "^0.9.10",
-    "vite": "^8.0.16"
+    "three-mesh-bvh": "^0.9.13",
+    "vite": "^8.1.5"
   },
   "peerDependencies": {
     "three": ">=0.184.0"
