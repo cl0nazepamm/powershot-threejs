@@ -635,7 +635,7 @@ export const INFRARED_PRESETS = {
   white_phosphor: {
     // Original shipped look, intentionally kept byte-for-byte compatible in
     // its appearance controls. It remains available as the Ethereal profile.
-    name: "Ethereal",
+    name: "Ethereal (stylized monochromatic)",
     profile: "ethereal",
     input_mode: "rgb",
     halo_disc: false,
@@ -714,7 +714,7 @@ export const INFRARED_PRESETS = {
   // around 0.02-0.05 flux. The RGB-heuristic spectral controls are inert on
   // this path. Expect to trim flux_scale / gain against your renderer's units.
   white_phosphor_nir: {
-    name: "Ethereal (true NIR)",
+    name: "Ethereal (stylized monochromatic)",
     profile: "ethereal",
     input_mode: "nir",
     // The spectral demo historically enabled the bounded disc explicitly.

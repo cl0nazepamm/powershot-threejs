@@ -10,10 +10,14 @@ import {
   makeInfraredUniforms,
 } from "../src/infrared.js";
 
-test("the shipped gray look remains available as Ethereal", () => {
+test("the shipped gray look remains available as Ethereal (stylized monochromatic)", () => {
   const preset = INFRARED_PRESETS.white_phosphor;
 
-  assert.equal(preset.name, "Ethereal");
+  assert.equal(preset.name, "Ethereal (stylized monochromatic)");
+  assert.equal(
+    INFRARED_PRESETS.white_phosphor_nir.name,
+    "Ethereal (stylized monochromatic)",
+  );
   assert.equal(preset.profile, "ethereal");
   assert.deepEqual({
     glow_threshold: preset.glow_threshold,
