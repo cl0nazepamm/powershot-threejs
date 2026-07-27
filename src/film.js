@@ -191,16 +191,23 @@ function stHaloExtract(srcTex, ctx, inputEncoding) {
   return lin.mul(m);
 }
 
-// Passes 2/3 — separable gaussian with a wide tail; radius scales tap spacing.
+// Passes 2/3 — separable gaussian with a wide tail; radius scales sigma while
+// taps stay on the texel grid. Scaling tap SPACING instead (the old approach)
+// alternates full-weight on-center taps with bilinear-split half-weight taps,
+// so the effective kernel turns into a comb and highlights bloom into a
+// checker grid instead of a smooth halo. Tap count covers 3 sigma at the
+// slider max (radius 3.0 -> sigma 7.8); weights are shader-side because
+// halRadius is a uniform, and wsum-normalisation absorbs the tail truncation.
 function stHaloBlur(tex, ctx, dx, dy) {
-  const sigma = 2.6;
+  const sigma = ctx.P.halRadius.mul(2.6);
+  const negInv2s2 = float(-0.5).div(sigma.mul(sigma));
   let sum = vec3(0.0);
-  let wsum = 0.0;
-  for (let i = -6; i <= 6; i += 1) {
-    const w = Math.exp(-(i * i) / (2.0 * sigma * sigma));
-    const off = ctx.haloTexel.mul(vec2(dx, dy)).mul(ctx.P.halRadius.mul(i));
+  let wsum = float(0.0);
+  for (let i = -24; i <= 24; i += 1) {
+    const w = exp(negInv2s2.mul(i * i));
+    const off = ctx.haloTexel.mul(vec2(dx, dy)).mul(i);
     sum = sum.add(texture(tex, screenUV.add(off)).rgb.mul(w));
-    wsum += w;
+    wsum = wsum.add(w);
   }
   return sum.div(wsum);
 }
