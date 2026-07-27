@@ -938,6 +938,10 @@ export function applyInfraredProfile(pipeline, preset) {
   }
   applyInfraredPreset(pipeline.ctx, preset);
   if (preset.input_mode) pipeline.setInputMode(preset.input_mode);
+  pipeline.setInputResponse(
+    preset.nir_input ?? (preset.input_mode === "nir" ? 1.0 : 0.0),
+    preset.flux_scale ?? 1.0,
+  );
   pipeline.setHaloDisc(preset.halo_disc === true);
   pipeline.clearHistory();
   return pipeline;
@@ -1045,6 +1049,25 @@ export class InfraredPipeline {
     this.inputMode = next;
     this.ctx.P.nirInput.value = next === "nir" ? 1 : 0;
     this.dirty = true;
+  }
+
+  // One normalized "response" control with mode-correct semantics:
+  // - RGB input: blend the spectral heuristic toward ordinary monochrome.
+  // - true NIR input: scale the calibrated photocathode flux.
+  // referenceFluxScale must be the preset's unmodified base so repeated live
+  // slider writes never compound against an already-scaled uniform.
+  setInputResponse(value, referenceFluxScale = 1.0) {
+    const response = Math.min(1, Math.max(0, Number(value) || 0));
+    if (this.inputMode === "nir") {
+      const requestedScale = Number(referenceFluxScale);
+      const baseScale = Number.isFinite(requestedScale)
+        ? Math.max(0, requestedScale)
+        : 1.0;
+      this.ctx.P.nirInput.value = 1.0;
+      this.ctx.P.fluxScale.value = baseScale * response;
+      return;
+    }
+    this.ctx.P.nirInput.value = response;
   }
 
   // Opt-in relative-electron shot-noise model. This never changes Speedball GI

@@ -113,7 +113,36 @@ test("profile application switches source contract and halo topology", () => {
   applyInfraredProfile(pipeline, INFRARED_PRESETS.gen3_white_phosphor_nir);
   assert.equal(pipeline.inputMode, "nir");
   assert.equal(pipeline.ctx.P.nirInput.value, 1);
+  assert.equal(
+    pipeline.ctx.P.fluxScale.value,
+    INFRARED_PRESETS.gen3_white_phosphor_nir.flux_scale,
+  );
   assert.equal(pipeline.haloDisc, true);
+});
+
+test("input response preserves RGB blending and scales calibrated true-NIR flux", () => {
+  const pipeline = Object.create(InfraredPipeline.prototype);
+  pipeline.ctx = makeInfraredUniforms();
+
+  pipeline.inputMode = "rgb";
+  pipeline.ctx.P.fluxScale.value = 2.5;
+  pipeline.setInputResponse(0.35, 4.0);
+  assert.equal(pipeline.ctx.P.nirInput.value, 0.35);
+  assert.equal(pipeline.ctx.P.fluxScale.value, 2.5);
+
+  pipeline.inputMode = "nir";
+  pipeline.setInputResponse(0.25, 4.0);
+  assert.equal(pipeline.ctx.P.nirInput.value, 1);
+  assert.equal(pipeline.ctx.P.fluxScale.value, 1.0);
+
+  // Repeated writes use the immutable reference calibration, not the current
+  // scaled value, so dragging the slider cannot compound the response.
+  pipeline.setInputResponse(0.5, 4.0);
+  assert.equal(pipeline.ctx.P.fluxScale.value, 2.0);
+  pipeline.setInputResponse(2.0, 4.0);
+  assert.equal(pipeline.ctx.P.fluxScale.value, 4.0);
+  pipeline.setInputResponse(-1.0, 4.0);
+  assert.equal(pipeline.ctx.P.fluxScale.value, 0.0);
 });
 
 test("all infrared presets provide finite profile controls", () => {
