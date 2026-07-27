@@ -26,6 +26,7 @@ export {
   INFRARED_PRESETS,
   INFRARED_STAGE_DEFS,
   InfraredPipeline,
+  applyInfraredProfile,
   applyInfraredPreset,
   makeInfraredUniforms,
 } from "./infrared.js";

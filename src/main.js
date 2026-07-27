@@ -3,7 +3,8 @@ import * as THREE from "three/webgpu";
 import {
   Pipeline, PRESETS, PRESET_KEYS, STAGE_DEFS, applyPreset,
   FilmPipeline, FILM_PRESETS, FILM_PRESET_KEYS, applyFilmPreset,
-  InfraredPipeline, INFRARED_PRESETS, applyInfraredPreset,
+  InfraredPipeline, INFRARED_PRESETS, INFRARED_PRESET_KEYS,
+  applyInfraredProfile,
   NightshotPipeline, NIGHTSHOT_PRESETS, applyNightshotPreset,
 } from "./index.js";
 
@@ -52,6 +53,7 @@ const els = {
   filmflicker: document.getElementById("filmflicker"),
   filmflickerval: document.getElementById("filmflickerval"),
   filmnegview: document.getElementById("filmnegview"),
+  infraredpreset: document.getElementById("infraredpreset"),
   infraredexposure: document.getElementById("infraredexposure"),
   infraredexposureval: document.getElementById("infraredexposureval"),
   infraredresponse: document.getElementById("infraredresponse"),
@@ -166,7 +168,7 @@ let lastTickAt = 0;
 let mode = "analog";
 let presetKey = "cybershot";
 let filmPresetKey = FILM_PRESET_KEYS[0];
-let infraredPresetKey = "white_phosphor";
+let infraredPresetKey = "gen3_white_phosphor";
 let nightshotPresetKey = "nightshot_plus";
 let resolutionScale = 0.65;
 let busy = false;
@@ -201,13 +203,14 @@ async function init() {
 
   buildPresetUI();
   buildFilmPresetUI();
+  buildInfraredPresetUI();
   buildStageUI();
   wireInput();
 
   await loadImage(DEFAULT_IMAGE);
   applyPreset(pipeline.ctx, PRESETS[presetKey]);
   applyFilmPreset(filmPipeline.ctx, FILM_PRESETS[filmPresetKey]);
-  applyInfraredPreset(infraredPipeline.ctx, INFRARED_PRESETS[infraredPresetKey]);
+  applyInfraredProfile(infraredPipeline, INFRARED_PRESETS[infraredPresetKey]);
   applyNightshotPreset(nightshotPipeline, NIGHTSHOT_PRESETS[nightshotPresetKey]);
   syncEffectUI();
 
@@ -242,6 +245,30 @@ function buildFilmPresetUI() {
     filmPresetKey = els.filmpreset.value;
     applyFilmPreset(filmPipeline.ctx, FILM_PRESETS[filmPresetKey]);
     syncEffectUI();
+  });
+}
+
+function buildInfraredPresetUI() {
+  // The `_nir` presets expect a linear photocathode-response texture and must
+  // not appear in the ordinary image/video demo.
+  const displayKeys = INFRARED_PRESET_KEYS.filter(
+    (key) => INFRARED_PRESETS[key].input_mode === "rgb",
+  );
+  displayKeys.sort(
+    (a, b) => Number(b === infraredPresetKey) - Number(a === infraredPresetKey),
+  );
+  for (const key of displayKeys) {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = INFRARED_PRESETS[key].name;
+    els.infraredpreset.appendChild(opt);
+  }
+  els.infraredpreset.value = infraredPresetKey;
+  els.infraredpreset.addEventListener("change", () => {
+    infraredPresetKey = els.infraredpreset.value;
+    applyInfraredProfile(infraredPipeline, INFRARED_PRESETS[infraredPresetKey]);
+    syncEffectUI();
+    resizeForSource();
   });
 }
 
@@ -647,6 +674,7 @@ function syncEffectUI() {
   setSlider(els.filmflicker, els.filmflickerval, FP.flicker.value);
 
   const IP = infraredPipeline.ctx.P;
+  els.infraredpreset.value = infraredPresetKey;
   setSlider(els.infraredexposure, els.infraredexposureval, IP.exposure.value);
   setSlider(els.infraredresponse, els.infraredresponseval, IP.nirInput.value);
   setSlider(els.infraredlocalgain, els.infraredlocalgainval, IP.localGain.value);

@@ -165,7 +165,18 @@ function stNirPrepass(srcTex, ctx, { inputMode, inputEncoding }) {
 // on a soft base - the cure for "generic grain". Full 9-tap kernel (the old
 // 5-tap plus kernel passed diagonals unblurred - a faint cross artifact).
 function softNir(nirTex, ctx, uv) {
-  const o = ctx.texel.mul(ctx.P.psfSigma);
+  const p = uv.sub(0.5);
+  const aspect = ctx.resolution.x.div(ctx.resolution.y);
+  const q = vec2(p.x.mul(aspect), p.y);
+  const radius = sqrt(dot(q, q));
+  // High-end tubes stay crisp through most of the field, then lose a little
+  // modulation transfer in the outer eyepiece. Zero preserves the legacy
+  // spatially-uniform PSF used by the Ethereal profile.
+  const edge = smoothstep(0.34, 0.62, radius);
+  const edgeScale = float(1.0).add(
+    edge.mul(edge).mul(ctx.P.edgeResolutionFalloff),
+  );
+  const o = ctx.texel.mul(ctx.P.psfSigma).mul(edgeScale);
   let sum = float(0.0);
   const w = [1, 2, 1, 2, 4, 2, 1, 2, 1];
   let k = 0;
@@ -227,9 +238,15 @@ function sparkleAt(cell, fphase, L, ctx) {
   const P = ctx.P;
   const u = hash13(vec3(cell.x, cell.y, fphase.add(11.0)));
   const darkness = float(1.0).sub(smoothstep(0.025, 0.58, L));
-  const dens = P.scintDensity.mul(
-    float(1.0).add(P.scintDarkBoost.mul(darkness)),
+  // A modern high-SNR tube is almost clean on lit surfaces. The legacy
+  // Ethereal look sets scintBrightFloor=1, which algebraically reproduces the
+  // old `1 + boost * darkness` density curve exactly.
+  const densityScale = mix(
+    P.scintBrightFloor,
+    float(1.0).add(P.scintDarkBoost),
+    darkness,
   );
+  const dens = P.scintDensity.mul(densityScale);
   const fire = step(float(1.0).sub(dens), u); // only the top `dens` fraction fire
   const v = hash13(vec3(cell.x.add(7.0), cell.y.add(3.0), fphase.add(23.0)));
   const amp = v.pow(P.scintSharp).mul(P.scintGain); // pow -> rare bright pops, not uniform
@@ -337,14 +354,45 @@ function stAnalysisBlur(tex, ctx, dx, dy, disc) {
 function stAbcUpdate(analysisTex, gainPrevTex, ctx) {
   const P = ctx.P;
   let sum = float(0.0);
-  const grid = 8;
-  for (let j = 0; j < grid; j += 1) {
-    for (let i = 0; i < grid; i += 1) {
-      sum = sum.add(texture(analysisTex, vec2((i + 0.5) / grid, (j + 0.5) / grid)).r);
+  const meanGrid = 8;
+  for (let j = 0; j < meanGrid; j += 1) {
+    for (let i = 0; i < meanGrid; i += 1) {
+      sum = sum.add(texture(
+        analysisTex,
+        vec2((i + 0.5) / meanGrid, (j + 0.5) / meanGrid),
+      ).r);
     }
   }
-  const mean = sum.mul(1.0 / (grid * grid)).max(1e-4);
-  const target = P.middleGrey.div(mean).clamp(P.abcMin, P.abcMax);
+  // Keep the legacy 8x8 mean above exactly intact for Ethereal. A denser,
+  // row-reduced pass only finds compact hot sources for the Gen-3 gate.
+  let hotPeak = float(0.0);
+  const hotGrid = 16;
+  for (let j = 0; j < hotGrid; j += 1) {
+    // A flat 256-sample max expression exceeds Tint's WGSL parser recursion
+    // depth even though the work itself is tiny (one output pixel).
+    let rowPeak = float(0.0);
+    for (let i = 0; i < hotGrid; i += 1) {
+      const sample = texture(
+        analysisTex,
+        vec2((i + 0.5) / hotGrid, (j + 0.5) / hotGrid),
+      );
+      rowPeak = max(rowPeak, sample.g);
+    }
+    hotPeak = max(hotPeak, rowPeak);
+  }
+  const mean = sum.mul(1.0 / (meanGrid * meanGrid)).max(1e-4);
+  const baseTarget = P.middleGrey.div(mean).clamp(P.abcMin, P.abcMax);
+  // Autogating is not random whole-frame flicker. A hot source briefly drives
+  // the tube gain down, using the existing fast-attack / slow-recovery loop.
+  // Ethereal sets strength=0 and therefore retains the previous ABC response.
+  const hotGate = smoothstep(
+    P.autogateThreshold,
+    P.autogateThreshold.add(P.autogateSoftness),
+    hotPeak,
+  );
+  const target = baseTarget.mul(
+    float(1.0).sub(P.autogateStrength.mul(hotGate)),
+  ).clamp(P.abcMin, P.abcMax);
   const prev = texture(gainPrevTex, vec2(0.5, 0.5)).r;
   // dimming (target below current gain) uses the fast attack constant
   const tau = mix(P.abcRecover, P.abcAttack, step(target, prev)).max(1e-3);
@@ -515,6 +563,9 @@ export function makeInfraredUniforms() {
       abcRecover: uniform(0.35),
       abcMin: uniform(0.45),
       abcMax: uniform(2.6),
+      autogateStrength: uniform(0.0),
+      autogateThreshold: uniform(0.62),
+      autogateSoftness: uniform(0.28),
 
       // MCP gain + Naka-Rushton transfer
       gain: uniform(3.4),
@@ -539,6 +590,7 @@ export function makeInfraredUniforms() {
 
       // resolution-limited optics
       psfSigma: uniform(0.75),
+      edgeResolutionFalloff: uniform(0.0),
 
       // chicken-wire fixed pattern
       chickenAmp: uniform(0.02),
@@ -554,6 +606,7 @@ export function makeInfraredUniforms() {
       scintGain: uniform(0.55),
       scintSharp: uniform(3.2),
       scintDarkBoost: uniform(1.0),
+      scintBrightFloor: uniform(1.0),
       shotStrength: uniform(0.035),
       scintFloor: uniform(0.5),
 
@@ -580,7 +633,12 @@ export function makeInfraredUniforms() {
 
 export const INFRARED_PRESETS = {
   white_phosphor: {
-    name: "P45 White Phosphor",
+    // Original shipped look, intentionally kept byte-for-byte compatible in
+    // its appearance controls. It remains available as the Ethereal profile.
+    name: "Ethereal",
+    profile: "ethereal",
+    input_mode: "rgb",
+    halo_disc: false,
     sensor_resolution: [1280, 960],
     exposure: 0.85,
     nir_input: 0.0,
@@ -601,6 +659,9 @@ export const INFRARED_PRESETS = {
     abc_recover: 0.35,
     abc_min: 0.45,
     abc_max: 2.6,
+    autogate_strength: 0.0,
+    autogate_threshold: 0.62,
+    autogate_softness: 0.28,
     gain: 3.9,
     max_output: 0.98,
     glow_threshold: 0.44,
@@ -617,6 +678,7 @@ export const INFRARED_PRESETS = {
     masked_eye_core: 0.82,
     masked_eye_halo: 0.68,
     psf_sigma: 0.92,
+    edge_resolution_falloff: 0.0,
     chicken_amp: 0.012,
     chicken_freq: 44.0,
     chicken_line: 0.045,
@@ -630,6 +692,7 @@ export const INFRARED_PRESETS = {
     scint_gain: 0.55,
     scint_sharp: 4.2,
     scint_dark_boost: 1.6,
+    scint_bright_floor: 1.0,
     shot_strength: 0.026,
     scint_floor: 0.72,
     phosphor_chroma: [0.78, 0.86, 0.96],
@@ -651,7 +714,11 @@ export const INFRARED_PRESETS = {
   // around 0.02-0.05 flux. The RGB-heuristic spectral controls are inert on
   // this path. Expect to trim flux_scale / gain against your renderer's units.
   white_phosphor_nir: {
-    name: "P45 White Phosphor (true NIR)",
+    name: "Ethereal (true NIR)",
+    profile: "ethereal",
+    input_mode: "nir",
+    // The spectral demo historically enabled the bounded disc explicitly.
+    halo_disc: true,
     sensor_resolution: [1280, 960],
     exposure: 0.0,
     nir_input: 1.0,
@@ -673,6 +740,9 @@ export const INFRARED_PRESETS = {
     abc_recover: 0.35,
     abc_min: 0.45,
     abc_max: 3.4,
+    autogate_strength: 0.0,
+    autogate_threshold: 0.62,
+    autogate_softness: 0.28,
     gain: 6.5,
     max_output: 0.98,
     glow_threshold: 0.30,
@@ -689,6 +759,7 @@ export const INFRARED_PRESETS = {
     masked_eye_core: 0.82,
     masked_eye_halo: 0.68,
     psf_sigma: 0.92,
+    edge_resolution_falloff: 0.0,
     chicken_amp: 0.012,
     chicken_freq: 44.0,
     chicken_line: 0.045,
@@ -700,6 +771,7 @@ export const INFRARED_PRESETS = {
     scint_gain: 0.55,
     scint_sharp: 4.2,
     scint_dark_boost: 1.6,
+    scint_bright_floor: 1.0,
     shot_strength: 0.026,
     scint_floor: 0.72,
     phosphor_chroma: [0.78, 0.86, 0.96],
@@ -715,6 +787,73 @@ export const INFRARED_PRESETS = {
     hotspot: 0.055,
     persistence: 0.42,
   },
+};
+
+// Modern unfilmed Gen-3/P45 rendering profile. Manufacturer material describes
+// the output as broad-spectrum white phosphor with a blue contribution: the
+// image reads as cool black-and-white, not neutral grayscale or saturated cyan.
+// Highlights converge toward icy silver while dark/mid values retain blue-gray.
+const GEN3_SILVER_VISUAL = {
+  profile: "gen3",
+  halo_disc: true,
+  abc_attack: 0.055,
+  abc_recover: 0.24,
+  autogate_strength: 0.18,
+  autogate_threshold: 0.62,
+  autogate_softness: 0.28,
+  glow_threshold: 0.48,
+  glow_softness: 0.20,
+  glow_strength: 0.27,
+  glow_radius: 1.62,
+  psf_sigma: 0.84,
+  edge_resolution_falloff: 0.68,
+  chicken_amp: 0.008,
+  chicken_freq: 52.0,
+  noise_amount: 0.52,
+  scint_density: 0.014,
+  scint_dark_boost: 2.0,
+  scint_bright_floor: 0.02,
+  shot_strength: 0.010,
+  phosphor_chroma: [0.66, 0.83, 1.00],
+  highlight_white: [0.93, 0.98, 1.00],
+  highlight_desat: 0.68,
+  bloom_start: 0.54,
+  bloom_range: 0.48,
+  screen_black: 0.005,
+  screen_gain: 1.10,
+  screen_shoulder: 0.90,
+  vignette: 0.24,
+  hotspot: 0.045,
+  persistence: 0.34,
+};
+
+INFRARED_PRESETS.gen3_white_phosphor = {
+  ...INFRARED_PRESETS.white_phosphor,
+  ...GEN3_SILVER_VISUAL,
+  name: "Gen 3 White Phosphor · Silver Blue",
+  input_mode: "rgb",
+  sensor_resolution: [...INFRARED_PRESETS.white_phosphor.sensor_resolution],
+  spectral_mix: [...INFRARED_PRESETS.white_phosphor.spectral_mix],
+  phosphor_chroma: [...GEN3_SILVER_VISUAL.phosphor_chroma],
+  highlight_white: [...GEN3_SILVER_VISUAL.highlight_white],
+};
+
+INFRARED_PRESETS.gen3_white_phosphor_nir = {
+  ...INFRARED_PRESETS.white_phosphor_nir,
+  ...GEN3_SILVER_VISUAL,
+  name: "Gen 3 White Phosphor · Silver Blue (true NIR)",
+  input_mode: "nir",
+  sensor_resolution: [...INFRARED_PRESETS.white_phosphor_nir.sensor_resolution],
+  spectral_mix: [...INFRARED_PRESETS.white_phosphor_nir.spectral_mix],
+  phosphor_chroma: [...GEN3_SILVER_VISUAL.phosphor_chroma],
+  highlight_white: [...GEN3_SILVER_VISUAL.highlight_white],
+  // Preserve the hotter true-NIR calibration from the existing spectral preset.
+  exposure: INFRARED_PRESETS.white_phosphor_nir.exposure,
+  local_gain: INFRARED_PRESETS.white_phosphor_nir.local_gain,
+  max_gain: INFRARED_PRESETS.white_phosphor_nir.max_gain,
+  abc_max: INFRARED_PRESETS.white_phosphor_nir.abc_max,
+  gain: INFRARED_PRESETS.white_phosphor_nir.gain,
+  glow_threshold: 0.34,
 };
 
 export const INFRARED_PRESET_KEYS = Object.keys(INFRARED_PRESETS);
@@ -742,6 +881,9 @@ export function applyInfraredPreset(ctx, preset) {
   P.abcRecover.value = preset.abc_recover ?? 0.35;
   P.abcMin.value = preset.abc_min ?? 0.45;
   P.abcMax.value = preset.abc_max ?? 2.6;
+  P.autogateStrength.value = preset.autogate_strength ?? 0.0;
+  P.autogateThreshold.value = preset.autogate_threshold ?? 0.62;
+  P.autogateSoftness.value = preset.autogate_softness ?? 0.28;
   P.gain.value = preset.gain;
   P.maxOutput.value = preset.max_output;
   P.glowThreshold.value = preset.glow_threshold;
@@ -758,6 +900,7 @@ export function applyInfraredPreset(ctx, preset) {
   P.maskedEyeCore.value = preset.masked_eye_core;
   P.maskedEyeHalo.value = preset.masked_eye_halo;
   P.psfSigma.value = preset.psf_sigma;
+  P.edgeResolutionFalloff.value = preset.edge_resolution_falloff ?? 0.0;
   P.chickenAmp.value = preset.chicken_amp;
   P.chickenFreq.value = preset.chicken_freq;
   P.chickenLine.value = preset.chicken_line;
@@ -769,6 +912,7 @@ export function applyInfraredPreset(ctx, preset) {
   P.scintGain.value = preset.scint_gain;
   P.scintSharp.value = preset.scint_sharp;
   P.scintDarkBoost.value = preset.scint_dark_boost;
+  P.scintBrightFloor.value = preset.scint_bright_floor ?? 1.0;
   P.shotStrength.value = preset.shot_strength;
   P.scintFloor.value = preset.scint_floor;
   P.phosphorChroma.value.set(...preset.phosphor_chroma);
@@ -783,6 +927,20 @@ export function applyInfraredPreset(ctx, preset) {
   P.vignette.value = preset.vignette;
   P.hotspot.value = preset.hotspot;
   P.persistence.value = preset.persistence ?? 0.3;
+}
+
+// Preset metadata that changes graph topology or source interpretation lives on
+// the pipeline rather than in uniforms. The old ctx-only helper above remains
+// fully supported for existing package consumers.
+export function applyInfraredProfile(pipeline, preset) {
+  if (!pipeline?.ctx?.P) {
+    throw new TypeError("applyInfraredProfile requires an InfraredPipeline");
+  }
+  applyInfraredPreset(pipeline.ctx, preset);
+  if (preset.input_mode) pipeline.setInputMode(preset.input_mode);
+  pipeline.setHaloDisc(preset.halo_disc === true);
+  pipeline.clearHistory();
+  return pipeline;
 }
 
 export const INFRARED_STAGE_DEFS = [

@@ -16,7 +16,7 @@
 //     brightness: the Planck NIR tail makes the bulb dominate through the tube
 //   - a sodium street lamp (589 nm line) goes dim; water goes black; skin lifts
 //
-// Keys: V visible/NV · N tube/NightShot · I toggle IR illuminator · [ ] tube exposure
+// Keys: V visible/NV · N tube/NightShot · P tube profile · I toggle IR illuminator · [ ] tube exposure
 //       - = input gamma (18%-pivoted mid correction)
 //       NightShot: , . VHS strength · < > tape noise · ; ' CCD smear · drag orbit
 
@@ -26,7 +26,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createSpectralTracer } from "speedball-gi/spectral-tracer";
 import { createNirBand } from "./nir_band.js";
 import {
-  InfraredPipeline, INFRARED_PRESETS, applyInfraredPreset,
+  InfraredPipeline, INFRARED_PRESETS, applyInfraredProfile,
 } from "./infrared.js";
 import {
   NightshotPipeline, NIGHTSHOT_PRESETS, applyNightshotPreset,
@@ -48,6 +48,7 @@ let irLight, mode = "nv", irOn = true;
 let electronModelOn = true;
 // imaging device consuming the flux: Gen-3 tube or Sony NightShot camcorder
 let device = "tube";
+let tubeProfileKey = "gen3_white_phosphor_nir";
 let frame = 0, lastT = 0, statusLine = "";
 // realtime three-band raster path (see src/nir_band.js)
 let realtime = true, band = null;
@@ -317,7 +318,10 @@ function hudText() {
     "SPECTRAL NIR NIGHT VISION — tracer / 3-band raster → intensifier",
     `mode        ${mode === "nv" ? "NV (relative response λ550–900)" : "VISIBLE (XYZ λ380–720)"}   [V]`,
     mode === "nv"
-      ? `device      ${device === "tube" ? "Gen-3 tube (white phosphor)" : "Sony NightShot (CCD + tape path)"}   [N]`
+      ? `device      ${device === "tube" ? `Gen-3 tube · ${INFRARED_PRESETS[tubeProfileKey].name}` : "Sony NightShot (CCD + tape path)"}   [N]`
+      : "",
+    mode === "nv" && device === "tube"
+      ? "profile     Silver Blue / Ethereal   [P]"
       : "",
     mode === "nv" && device === "nightshot"
       ? `tape        VHS ${nightshot.cam.ctx.P.analogStrength.value.toFixed(2)} [, .] · noise ${nightshot.cam.ctx.P.analogTapeNoise.value.toFixed(2)} [< >] · smear ${nightshot.ctx.P.smear.value.toFixed(2)} [; ']`
@@ -349,10 +353,8 @@ async function init() {
   buildScene();
 
   infrared = new InfraredPipeline(renderer);
-  applyInfraredPreset(infrared.ctx, INFRARED_PRESETS.white_phosphor_nir);
-  infrared.setInputMode("nir");
+  applyInfraredProfile(infrared, INFRARED_PRESETS[tubeProfileKey]);
   infrared.setElectronModel(ELECTRON_PROFILE);
-  infrared.setHaloDisc(true);
 
   nightshot = new NightshotPipeline(renderer);
   applyNightshotPreset(nightshot, NIGHTSHOT_PRESETS.nightshot_plus);
@@ -406,6 +408,12 @@ async function init() {
   window.addEventListener("keydown", (e) => {
     if (e.key === "v" || e.key === "V") setMode(mode === "nv" ? "visible" : "nv");
     if (e.key === "n" || e.key === "N") device = device === "tube" ? "nightshot" : "tube";
+    if (e.key === "p" || e.key === "P") {
+      tubeProfileKey = tubeProfileKey === "gen3_white_phosphor_nir"
+        ? "white_phosphor_nir"
+        : "gen3_white_phosphor_nir";
+      applyInfraredProfile(infrared, INFRARED_PRESETS[tubeProfileKey]);
+    }
     if (e.key === "r" || e.key === "R") realtime = !realtime;
     if (e.key === "e" || e.key === "E") {
       electronModelOn = !electronModelOn;
