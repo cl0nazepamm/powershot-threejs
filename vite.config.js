@@ -15,6 +15,7 @@ export default defineConfig({
       input: {
         main: resolve(import.meta.dirname, "index.html"),
         nv: resolve(import.meta.dirname, "nv.html"),
+        flare: resolve(import.meta.dirname, "flare.html"),
       },
     },
   },

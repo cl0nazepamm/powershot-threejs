@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101319">
+  <title>PowerShot · spectral sunlight lens flare</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-synthesis: none;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #080a0e;
+      color: #f2f0e9;
+    }
+
+    #viewport {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      outline: none;
+      touch-action: none;
+    }
+
+    .masthead {
+      position: fixed;
+      inset: 22px auto auto 24px;
+      z-index: 4;
+      max-width: min(560px, calc(100vw - 390px));
+      pointer-events: none;
+      text-shadow: 0 2px 20px rgba(0, 0, 0, 0.65);
+    }
+
+    .eyebrow {
+      margin: 0 0 7px;
+      color: #e9ba71;
+      font: 650 10px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+      letter-spacing: 0.19em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(25px, 3.2vw, 48px);
+      font-weight: 540;
+      line-height: 0.98;
+      letter-spacing: -0.045em;
+    }
+
+    .subtitle {
+      max-width: 480px;
+      margin: 12px 0 0;
+      color: rgba(246, 244, 237, 0.72);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .panel {
+      position: fixed;
+      z-index: 5;
+      inset: 18px 18px auto auto;
+      width: 328px;
+      max-height: calc(100vh - 36px);
+      overflow: auto;
+      padding: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 16px;
+      background:
+        linear-gradient(145deg, rgba(31, 35, 42, 0.88), rgba(13, 15, 19, 0.82));
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.36);
+      backdrop-filter: blur(18px) saturate(125%);
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .lens {
+      color: rgba(255, 255, 255, 0.82);
+      font: 600 10px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    #status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #f1d49c;
+      font: 650 9px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+    }
+
+    #status::before {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 12px currentColor;
+      content: "";
+    }
+
+    .control {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 54px;
+      gap: 6px 10px;
+      padding: 9px 0;
+      border-top: 1px solid rgba(255, 255, 255, 0.075);
+    }
+
+    .control label {
+      color: rgba(255, 255, 255, 0.77);
+      font-size: 11px;
+      letter-spacing: 0.01em;
+    }
+
+    .control output {
+      color: #f1c880;
+      font: 600 10px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+      text-align: right;
+    }
+
+    input[type="range"] {
+      grid-column: 1 / -1;
+      width: 100%;
+      height: 14px;
+      margin: 0;
+      accent-color: #e8b76d;
+      cursor: ew-resize;
+    }
+
+    .note {
+      margin: 13px 0 0;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255, 255, 255, 0.075);
+      color: rgba(255, 255, 255, 0.48);
+      font: 9px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    #loading {
+      position: fixed;
+      z-index: 8;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: #080a0e;
+      color: rgba(255, 255, 255, 0.68);
+      font: 600 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+      letter-spacing: 0.12em;
+      text-align: center;
+      text-transform: uppercase;
+      transition: opacity 420ms ease, visibility 420ms ease;
+    }
+
+    #loading.done {
+      visibility: hidden;
+      opacity: 0;
+    }
+
+    #loading.error {
+      color: #ffb4a9;
+      text-transform: none;
+    }
+
+    .hint {
+      position: fixed;
+      z-index: 4;
+      inset: auto auto 20px 24px;
+      color: rgba(255, 255, 255, 0.56);
+      font: 10px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+      pointer-events: none;
+      text-shadow: 0 1px 8px #000;
+    }
+
+    @media (max-width: 760px) {
+      .masthead {
+        inset: 16px 16px auto;
+        max-width: none;
+      }
+
+      .subtitle { display: none; }
+
+      .panel {
+        inset: auto 10px 10px;
+        width: auto;
+        max-height: 50vh;
+        padding: 12px 14px;
+        border-radius: 14px;
+      }
+
+      .hint { display: none; }
+      .control { padding: 7px 0; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="viewport" tabindex="0" aria-label="Interactive outdoor spectral lens flare scene"></canvas>
+
+  <header class="masthead">
+    <p class="eyebrow">PowerShot spectral optics</p>
+    <h1>Sunlight through real glass.</h1>
+    <p class="subtitle">
+      Scene-linear WebGPU flare from a traced Tronnier Heliar prescription:
+      wavelength-resolved internal reflections, aperture diffraction, and
+      depth-aware solar occlusion.
+    </p>
+  </header>
+
+  <aside class="panel" aria-label="Spectral flare controls">
+    <div class="panel-head">
+      <span class="lens">Heliar 100 mm · 7 blade</span>
+      <span id="status">loading atlas</span>
+    </div>
+
+    <div class="control">
+      <label for="sunAngle">Sun angle</label>
+      <output id="sunAngleValue" for="sunAngle">0.0°</output>
+      <input id="sunAngle" type="range" min="-34" max="34" step="0.1" value="0">
+    </div>
+
+    <div class="control">
+      <label for="sunElevation">Sun elevation</label>
+      <output id="sunElevationValue" for="sunElevation">14.5°</output>
+      <input id="sunElevation" type="range" min="3" max="42" step="0.1" value="14.5">
+    </div>
+
+    <div class="control">
+      <label for="fNumber">Aperture</label>
+      <output id="fNumberValue" for="fNumber">f/8.0</output>
+      <input id="fNumber" type="range" min="1.4" max="22" step="0.1" value="8">
+    </div>
+
+    <div class="control">
+      <label for="ghost">Spectral ghosts</label>
+      <output id="ghostValue" for="ghost">1.00×</output>
+      <input id="ghost" type="range" min="0" max="2.5" step="0.01" value="1">
+    </div>
+
+    <div class="control">
+      <label for="diffraction">Diffraction</label>
+      <output id="diffractionValue" for="diffraction">5.00×</output>
+      <input id="diffraction" type="range" min="0" max="10" step="0.05" value="5">
+    </div>
+
+    <div class="control">
+      <label for="glare">Sun glare</label>
+      <output id="glareValue" for="glare">1.00×</output>
+      <input id="glare" type="range" min="0" max="2.5" step="0.01" value="1">
+    </div>
+
+    <div class="control">
+      <label for="veil">Veiling glare</label>
+      <output id="veilValue" for="veil">0.06×</output>
+      <input id="veil" type="range" min="0" max="0.5" step="0.005" value="0.06">
+    </div>
+
+    <div class="control">
+      <label for="visibility">External visibility</label>
+      <output id="visibilityValue" for="visibility">100%</output>
+      <input id="visibility" type="range" min="0" max="1" step="0.01" value="1">
+    </div>
+
+    <p class="note">
+      The visibility control multiplies the 9-sample scene-depth solar test.
+      Move the sun behind trees or the roofline to inspect partial occlusion.
+      The 0.533° HDR disk and DirectionalLight share one solar direction.
+    </p>
+  </aside>
+
+  <div class="hint">drag to orbit · wheel to dolly · double-click to reset view</div>
+  <div id="loading">loading 10 MB spectral transfer atlas…</div>
+
+  <script type="module" src="./src/flare-demo.js"></script>
+</body>
+</html>
