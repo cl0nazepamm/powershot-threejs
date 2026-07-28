@@ -323,6 +323,10 @@ export function createDiffractionPsfTexture(options = {}) {
   texture.needsUpdate = true;
 
   const entry = { ...generated, texture, users: 1, key };
+  // The runtime only samples the texture. Its scaled array stays reachable via
+  // texture.image.data; the unscaled CPU copy (2·size² bytes) exists for
+  // generateDiffractionPsf() consumers (tests, tools) and is dropped here.
+  delete entry.data;
   PSF_CACHE.set(key, entry);
   return entry;
 }

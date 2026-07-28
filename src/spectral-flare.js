@@ -433,6 +433,11 @@ export class SpectralLensFlarePipeline {
       sensorToNdc: uniform(new THREE.Vector2(1, 1)),
       sunRadiusInPsfUv: uniform(0),
       psfHalfSizeNdc: uniform(new THREE.Vector2(0.05, 0.05)),
+      diffractionQuadCenter: uniform(new THREE.Vector2()),
+      diffractionQuadHalf: uniform(new THREE.Vector2(1, 1)),
+      diffractionUvOrigin: uniform(new THREE.Vector2()),
+      diffractionUvScale: uniform(new THREE.Vector2(1, 1)),
+      diffractionUvMax: uniform(new THREE.Vector2()),
       aspect: uniform(1),
       axial: uniform(1),
       externalVisibility: uniform(1),
@@ -445,7 +450,15 @@ export class SpectralLensFlarePipeline {
     };
 
     this.rtGhost = makeTarget(1, 1);
-    this.rtDiffraction = makeTarget(1, 1);
+    // The bounded PSF quad only covers a small screen window, so diffraction
+    // renders into a pixel-grid-aligned sub-rect target rather than a
+    // full-resolution buffer. Nearest filtering keeps the composite fetch an
+    // exact texel read at that alignment.
+    this.rtDiffraction = makeTarget(1, 1, {
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+    });
+    this._diffractionVisible = false;
     this.rtVeil = makeTarget(1, 1);
     this.rtVisibilityRaw = makeTarget(1, 1, {
       format: THREE.RedFormat,
@@ -666,8 +679,13 @@ export class SpectralLensFlarePipeline {
   }
 
   _buildDiffractionMaterial() {
+    // Placement inside the sub-rect target, in that target's NDC. The rect is
+    // snapped to the drawing-buffer pixel grid, so the quad keeps the exact
+    // sub-pixel position it would occupy in a full-resolution pass.
     const positionNode = vec3(
-      this.ctx.sunNdc.add(positionGeometry.xy.mul(this.ctx.psfHalfSizeNdc)),
+      this.ctx.diffractionQuadCenter.add(
+        positionGeometry.xy.mul(this.ctx.diffractionQuadHalf),
+      ),
       0,
     );
     let spectral = vec3(0);
@@ -740,7 +758,17 @@ export class SpectralLensFlarePipeline {
   _buildCompositeMaterial() {
     const source = this._sourceNode;
     const ghost = max(texture(this.rtGhost.texture, screenUV).rgb, vec3(0));
-    const diffraction = max(texture(this.rtDiffraction.texture, screenUV).rgb, vec3(0));
+    // Map the screen pixel into the sub-rect diffraction target. Pixels
+    // outside the rect read the same zero the full-resolution target held.
+    const diffractionUv = screenUV
+      .sub(this.ctx.diffractionUvOrigin)
+      .mul(this.ctx.diffractionUvScale);
+    const diffractionInside = step(0, diffractionUv.x)
+      .mul(step(diffractionUv.x, this.ctx.diffractionUvMax.x))
+      .mul(step(0, diffractionUv.y))
+      .mul(step(diffractionUv.y, this.ctx.diffractionUvMax.y));
+    const diffraction = max(texture(this.rtDiffraction.texture, diffractionUv).rgb, vec3(0))
+      .mul(diffractionInside);
     const veil = max(texture(this.rtVeil.texture, screenUV).rgb, vec3(0));
 
     const delta = screenUV.sub(this.ctx.sunUv).mul(vec2(this.ctx.aspect, 1));
@@ -932,7 +960,8 @@ export class SpectralLensFlarePipeline {
       Math.max(1, Math.round(w * clampNumber(this.settings.ghostResolutionScale, 0.125, 1))),
       Math.max(1, Math.round(h * clampNumber(this.settings.ghostResolutionScale, 0.125, 1))),
     );
-    this.rtDiffraction.setSize(w, h);
+    // The diffraction target re-grows to the new quad footprint next frame.
+    this.rtDiffraction.setSize(1, 1);
     this.rtVeil.setSize(
       Math.max(1, Math.round(w * clampNumber(this.settings.veilResolutionScale, 0.03125, 0.5))),
       Math.max(1, Math.round(h * clampNumber(this.settings.veilResolutionScale, 0.03125, 0.5))),
@@ -954,6 +983,49 @@ export class SpectralLensFlarePipeline {
       * this._psf.apertureFill
       * this.settings.fNumber
       * this.settings.diffractionScale;
+  }
+
+  // Sizes the diffraction target to the on-screen part of the PSF quad and
+  // derives the quad/composite mappings. The rect is snapped outward to whole
+  // drawing-buffer pixels so every covered pixel center keeps the identical
+  // quad-relative sample position it had with a full-resolution target.
+  _updateDiffractionPlacement() {
+    const { width, height } = this.size;
+    const halfPxX = this.ctx.psfHalfSizeNdc.value.x * width * 0.5;
+    const halfPxY = this.ctx.psfHalfSizeNdc.value.y * height * 0.5;
+    const centerPxX = this.ctx.sunUv.value.x * width;
+    const centerPxY = this.ctx.sunUv.value.y * height;
+    const x0 = clampNumber(Math.floor(centerPxX - halfPxX), 0, width);
+    const x1 = clampNumber(Math.ceil(centerPxX + halfPxX), 0, width);
+    const y0 = clampNumber(Math.floor(centerPxY - halfPxY), 0, height);
+    const y1 = clampNumber(Math.ceil(centerPxY + halfPxY), 0, height);
+    const rectWidth = Math.max(0, x1 - x0);
+    const rectHeight = Math.max(0, y1 - y0);
+    this._diffractionVisible = rectWidth > 0 && rectHeight > 0;
+    if (!this._diffractionVisible) {
+      this.ctx.diffractionUvMax.value.set(0, 0);
+      return;
+    }
+    if (rectWidth > this.rtDiffraction.width || rectHeight > this.rtDiffraction.height) {
+      // Grow-only, in 64-pixel steps, so sun motion never reallocates per frame.
+      this.rtDiffraction.setSize(
+        Math.min(width, Math.ceil(rectWidth / 64) * 64),
+        Math.min(height, Math.ceil(rectHeight / 64) * 64),
+      );
+    }
+    const targetWidth = this.rtDiffraction.width;
+    const targetHeight = this.rtDiffraction.height;
+    this.ctx.diffractionQuadCenter.value.set(
+      ((centerPxX - x0) / targetWidth) * 2 - 1,
+      1 - ((centerPxY - y0) / targetHeight) * 2,
+    );
+    this.ctx.diffractionQuadHalf.value.set(
+      (2 * halfPxX) / targetWidth,
+      (2 * halfPxY) / targetHeight,
+    );
+    this.ctx.diffractionUvOrigin.value.set(x0 / width, y0 / height);
+    this.ctx.diffractionUvScale.value.set(width / targetWidth, height / targetHeight);
+    this.ctx.diffractionUvMax.value.set(rectWidth / targetWidth, rectHeight / targetHeight);
   }
 
   _updateSunState(camera, sun, options) {
@@ -1124,6 +1196,7 @@ export class SpectralLensFlarePipeline {
     const r = this.renderer;
     r.setRenderTarget(this.rtDiffraction);
     r.clear();
+    if (!this._diffractionVisible) return;
     if (this.ctx.hoodAcceptance.value <= 0 || this.ctx.totalStrength.value <= 0) return;
     r.render(this.diffractionScene, this.quadCamera);
   }
@@ -1156,6 +1229,7 @@ export class SpectralLensFlarePipeline {
     this.source = inputTexture;
     this._sourceNode.value = inputTexture;
     const sunState = this._updateSunState(camera, sun, options);
+    this._updateDiffractionPlacement();
 
     const renderer = this.renderer;
     THREE.RendererUtils.resetRendererState(renderer, this._rendererState);

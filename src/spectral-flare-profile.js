@@ -279,9 +279,11 @@ export function parseSpectralFlareAtlas(arrayBuffer, { createTextures = true } =
     throw new Error("Spectral flare atlas payload size is inconsistent.");
   }
 
-  const atlasAHalf = new Uint16Array(arrayBuffer.slice(offset, offset + channelByteLength));
+  // Views, not copies: the texture path pads straight out of the fetch buffer,
+  // so the multi-megabyte payload is never duplicated on the JS heap.
+  const atlasAHalf = new Uint16Array(arrayBuffer, offset, channelValueCount);
   offset += channelByteLength;
-  const atlasBHalf = new Uint16Array(arrayBuffer.slice(offset, offset + channelByteLength));
+  const atlasBHalf = new Uint16Array(arrayBuffer, offset, channelValueCount);
 
   const atlasWidth = 2048;
   const atlasHeight = Math.ceil(recordCount / atlasWidth);
@@ -309,8 +311,6 @@ export function parseSpectralFlareAtlas(arrayBuffer, { createTextures = true } =
     log2Throughput: (flags & FLAG_LOG2_THROUGHPUT) !== 0,
     log2Flux: (flags & FLAG_LOG2_FLUX) !== 0,
     boundaryExtrapolated: (flags & FLAG_BOUNDARY_EXTRAPOLATED) !== 0,
-    atlasAHalf,
-    atlasBHalf,
   };
 
   if (createTextures) {
@@ -326,6 +326,12 @@ export function parseSpectralFlareAtlas(arrayBuffer, { createTextures = true } =
       atlasHeight,
       "PowerShot Heliar transfer B",
     );
+  } else {
+    // Raw channel views are retained only for the debug/test parse path. The
+    // GPU path samples the padded textures, so it drops the views and lets the
+    // GC reclaim the source ArrayBuffer they would otherwise pin.
+    result.atlasAHalf = atlasAHalf;
+    result.atlasBHalf = atlasBHalf;
   }
 
   return result;
@@ -352,8 +358,14 @@ export function disposeSpectralFlareProfile(profile) {
 }
 
 // Test/debug helper. Runtime rendering intentionally keeps the atlas packed as
-// half-float textures; decoding is useful for audit tools and deterministic tests.
+// half-float textures; decoding is useful for audit tools and deterministic
+// tests, so the raw arrays only exist when parsed with createTextures: false.
 export function decodeSpectralFlareAtlas(profile) {
+  if (!profile?.atlasAHalf || !profile?.atlasBHalf) {
+    throw new Error(
+      "decodeSpectralFlareAtlas() needs a profile parsed with createTextures: false.",
+    );
+  }
   return {
     atlasA: decodeHalfArray(profile.atlasAHalf),
     atlasB: decodeHalfArray(profile.atlasBHalf),

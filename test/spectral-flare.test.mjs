@@ -11,7 +11,11 @@ import {
   makeSpectralRgbWeights,
   parseSpectralFlareAtlas,
 } from "../src/spectral-flare-profile.js";
-import { generateDiffractionPsf } from "../src/spectral-flare-psf.js";
+import {
+  createDiffractionPsfTexture,
+  generateDiffractionPsf,
+  releaseDiffractionPsf,
+} from "../src/spectral-flare-psf.js";
 import {
   SPECTRAL_FLARE_DEFAULTS,
   apertureSpikeHarmonic,
@@ -93,6 +97,32 @@ test("atlas transport contains finite, unclamped off-screen rays and valid optic
   assert.ok(validCount > 100_000);
   assert.ok(offscreenCount > 1_000, "off-screen transport is preserved");
   assert.equal(positiveEnergyCount, validCount);
+});
+
+test("atlas raw channel arrays are retained only on the debug parse path", async () => {
+  const file = await readFile(atlasUrl);
+  const gpuProfile = parseSpectralFlareAtlas(
+    file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength),
+    { createTextures: true },
+  );
+  assert.equal(gpuProfile.atlasAHalf, undefined);
+  assert.equal(gpuProfile.atlasBHalf, undefined);
+  assert.equal(gpuProfile.textureA.image.width, gpuProfile.atlasWidth);
+  assert.equal(gpuProfile.textureA.image.height, gpuProfile.atlasHeight);
+  assert.throws(() => decodeSpectralFlareAtlas(gpuProfile), /createTextures/);
+
+  const debugProfile = await loadAtlas();
+  assert.ok(debugProfile.atlasAHalf instanceof Uint16Array);
+  const { atlasA } = decodeSpectralFlareAtlas(debugProfile);
+  assert.equal(atlasA.length, debugProfile.recordCount * 4);
+});
+
+test("cached PSF texture entries drop the unscaled CPU copy", () => {
+  const entry = createDiffractionPsfTexture({ size: 64 });
+  assert.equal(entry.data, undefined);
+  assert.ok(entry.texture.image.data instanceof Uint16Array);
+  assert.equal(entry.texture.image.data.length, 64 * 64);
+  releaseDiffractionPsf(entry);
 });
 
 test("finite-area ghost density conserves affine pupil energy", () => {
