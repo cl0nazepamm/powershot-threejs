@@ -27,7 +27,8 @@
   "files": [
     "LICENSE",
     "README.md",
-    "SPECTRAL_FLARE.md",
+    "SOLAR_FLARES.md",
+    "ADVANCED.md",
     "src/index.js",
     "src/pipeline.js",
     "src/presets.js",
