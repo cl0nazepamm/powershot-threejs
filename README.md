@@ -1,7 +1,10 @@
 # powershot for three.js
 
 <p align="center">
-  <img src="public/logo.png" alt="powershot" width="400">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="public/logo-dark.png">
+    <img src="public/logo.png" alt="powershot" width="400">
+  </picture>
 </p>
 
 Authentic digicam, analog tape, film and night-vision emulation post-processing for Three.js.

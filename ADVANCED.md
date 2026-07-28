@@ -149,4 +149,5 @@ renderPipeline.outputNode = effectPass(scenePass, {
 - `src/presets.js` - camera preset values.
 - `src/styles.css` - app UI styles.
 - `public/logo.png` - PowerSHOT logo.
+- `public/logo-dark.png` - inverted logo for dark-mode README rendering.
 - `public/vibe coding.jpg` - default test image.
