@@ -158,6 +158,10 @@ camera response exactly. Match a particular lens by calibrating path strengths,
 coating curves, veiling intensity, source radiance, and the downstream sensor
 model against photographs from that lens.
 
-The prescription is a classic public Tronnier Heliar design. The atlas
-generator in `tools/generate-spectral-flare-atlas.mjs` recomputes the shipped
-asset from the human-readable prescription in `src/spectral-flare-profile.js`.
+The prescription is a classic public Tronnier Heliar design. The surface table
+was digitized from OpenLensFlare's `heliar-tronnier.xml` sample
+(BSD-2-Clause, © István Csoba), which follows the same historical design used
+by Hullin et al. 2011. The atlas generator in
+`tools/generate-spectral-flare-atlas.mjs` recomputes the shipped asset from the
+human-readable prescription in `src/spectral-flare-profile.js`; no third-party
+binary data ships with PowerShot.

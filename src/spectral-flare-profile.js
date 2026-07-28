@@ -4,6 +4,12 @@ export const GHOST_WAVELENGTHS_NM = Object.freeze([475, 550, 650]);
 export const DIFFRACTION_WAVELENGTHS_NM = Object.freeze([430, 480, 530, 590, 650]);
 
 // Classic Tronnier Heliar 100 mm five-element prescription.
+// Provenance: surface table digitized from OpenLensFlare's
+// examples/systems/heliar-tronnier.xml (BSD-2-Clause, (c) Istvan Csoba,
+// https://github.com/csobaistvan/OpenLensFlare), which tabulates the public
+// A. W. Tronnier Heliar design for Voigtlaender (mid-20th century, patents
+// long expired) also used by Hullin et al. 2011. The table is factual optical
+// data; attribution is retained here regardless.
 // Distances are millimetres and each surface's `thicknessMm` advances to the
 // following surface. A zero radius is a plane, not an optically inert surface.
 export const HELIAR_TRONNIER_100MM = Object.freeze({
