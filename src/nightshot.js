@@ -32,7 +32,13 @@ import {
   dot, smoothstep,
 } from "three/tsl";
 import { InfraredPipeline, INFRARED_PRESETS, applyInfraredPreset } from "./infrared.js";
-import { Pipeline, applyPreset as applyCameraPreset } from "./pipeline.js";
+import {
+  Pipeline,
+  applyPreset as applyCameraPreset,
+  autoFrameTick,
+  autoSizeToInput,
+  resolvePreset,
+} from "./pipeline.js";
 import { PRESETS } from "./presets.js";
 
 const LUM709 = vec3(0.2126, 0.7152, 0.0722);
@@ -179,6 +185,13 @@ export class NightshotPipeline {
     this.ir.setInputEncoding(mode);
   }
 
+  // Accepts a NIGHTSHOT_PRESETS key ("nightshot_plus") or a preset object.
+  // The classic applyNightshotPreset(pipeline, preset) remains fully supported.
+  setPreset(preset) {
+    applyNightshotPreset(this, resolvePreset(NIGHTSHOT_PRESETS, preset, "NightShot preset"));
+    return this;
+  }
+
   setInputExposure(stops = 0) {
     this.ir.setInputExposure?.(stops);
   }
@@ -282,8 +295,17 @@ export class NightshotPipeline {
     return this.cam.renderTexture(camSource.texture, frame, { outputTarget }) === true;
   }
 
-  async render(frame, options = {}) {
-    return this.renderTexture(this.ir.source, frame, options);
+  // render(frame, options) — legacy: draw the current source with an explicit
+  // frame. render(texture?, options?) — friendly: draw `texture` (or the
+  // current source) with auto size, frame, and measured wall-clock dt.
+  async render(input, options = {}) {
+    if (typeof input === "number") {
+      return this.renderTexture(this.ir.source, input, options);
+    }
+    const tex = input ?? this.ir.source;
+    autoSizeToInput(this, tex);
+    const { frame, dt } = autoFrameTick(this);
+    return this.renderTexture(tex, frame, { dt, ...options });
   }
 
   clearHistory() {

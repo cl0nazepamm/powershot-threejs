@@ -27,7 +27,12 @@ import {
   mix, clamp, max, min, dot, abs, floor, fract, sin, cos, sqrt, log, exp,
   step, smoothstep,
 } from "three/tsl";
-import { powershotLinearGrade } from "./pipeline.js";
+import {
+  autoFrameTick,
+  autoSizeToInput,
+  powershotLinearGrade,
+  resolvePreset,
+} from "./pipeline.js";
 
 const LN10 = Math.LN10;
 const LUM709 = vec3(0.2126, 0.7152, 0.0722);
@@ -653,6 +658,13 @@ export class FilmPipeline {
     this.dirty = true;
   }
 
+  // Accepts a FILM_PRESETS key ("kodak_500t") or a preset object. The classic
+  // applyFilmPreset(film.ctx, preset) remains fully supported.
+  setPreset(preset) {
+    applyFilmPreset(this.ctx, resolvePreset(FILM_PRESETS, preset, "film stock"));
+    return this;
+  }
+
   setSource(tex) {
     if (this.source === tex) return;
     this.source = tex;
@@ -740,8 +752,17 @@ export class FilmPipeline {
     }
   }
 
-  async render(frame) {
-    this.renderTexture(this.source, frame);
+  // render(frame) — legacy: draw the current source with an explicit frame.
+  // render(texture?, options?) — friendly: draw `texture` (or the current
+  // source) with auto size and frame bookkeeping.
+  async render(input, options = {}) {
+    if (typeof input === "number") {
+      return this.renderTexture(this.source, input, options);
+    }
+    const tex = input ?? this.source;
+    autoSizeToInput(this, tex);
+    const { frame } = autoFrameTick(this);
+    return this.renderTexture(tex, frame, options);
   }
 
   dispose() {

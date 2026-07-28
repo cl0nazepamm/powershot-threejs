@@ -17,6 +17,7 @@ import {
   mix, clamp, max, min, dot, abs, floor, fract, sin, cos, sqrt, log, mod, step,
   exp, pow,
 } from "three/tsl";
+import { PRESETS } from "./presets.js";
 
 const LEVELS = 255.0;
 
@@ -1125,6 +1126,60 @@ export function applyPreset(ctx, preset) {
 }
 
 // ---------------------------------------------------------------------------
+// friendly-path helpers shared by every pipeline's setPreset() / render()
+// ---------------------------------------------------------------------------
+
+// Accept a preset key string or a full preset object.
+export function resolvePreset(presets, input, kind = "preset") {
+  if (typeof input === "string") {
+    const preset = presets[input];
+    if (!preset) {
+      throw new Error(
+        `Unknown ${kind} "${input}". Available: ${Object.keys(presets).join(", ")}.`,
+      );
+    }
+    return preset;
+  }
+  if (input && typeof input === "object") return input;
+  throw new TypeError(`Expected a ${kind} name or preset object, got ${typeof input}.`);
+}
+
+// Bookkeeping for render(texture): an advancing frame counter and measured
+// wall-clock dt so callers don't thread either through their loop. Explicit
+// renderTexture(texture, frame, options) calls stay deterministic — the
+// authenticity harness drives that path with fixed frames and never lands here.
+export function autoFrameTick(effect) {
+  const now = (globalThis.performance ?? Date).now();
+  const last = effect._autoClock ?? 0;
+  effect._autoClock = now;
+  effect._autoFrame = (effect._autoFrame ?? -1) + 1;
+  // clamp: no zero dt on double-render, no giant step after a hidden tab
+  const dt = last > 0
+    ? Math.min(Math.max((now - last) / 1000, 1 / 240), 1 / 15)
+    : 1 / 60;
+  return { frame: effect._autoFrame, dt };
+}
+
+// Best-effort pixel dimensions of an image, video, or render-target texture.
+export function textureDimensions(texture) {
+  const img = texture?.image;
+  if (!img) return null;
+  const w = img.videoWidth || img.width;
+  const h = img.videoHeight || img.height;
+  return Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0
+    ? { w, h }
+    : null;
+}
+
+// If the caller never picked a processing resolution, lock to the first input
+// frame's size. An explicit setSize() beforehand always wins.
+export function autoSizeToInput(effect, tex) {
+  if (effect.size.w !== 0 || effect.size.h !== 0) return;
+  const dims = textureDimensions(tex);
+  if (dims) effect.setSize(dims.w, dims.h);
+}
+
+// ---------------------------------------------------------------------------
 // runner — one persistent material PER stage (built once, reused every frame).
 //
 // A NodeMaterial compiles its shader once and caches it, so we cannot reuse a
@@ -1259,6 +1314,13 @@ export class Pipeline {
     if (next === this.mode) return;
     this.mode = next;
     this.dirty = true;
+  }
+
+  // Accepts a PRESETS key ("powershot") or a preset object. The classic
+  // applyPreset(pipeline.ctx, preset) remains fully supported.
+  setPreset(preset) {
+    applyPreset(this.ctx, resolvePreset(PRESETS, preset, "camera preset"));
+    return this;
   }
 
   setOutputColorGrading({ brightness = 0, contrast = 0 } = {}) {
@@ -1403,9 +1465,18 @@ export class Pipeline {
     }
   }
 
-  // run the chain and present to screen
-  async render(frame) {
-    this.renderTexture(this.source, frame);
+  // render(frame) — legacy: draw the current source with an explicit frame.
+  // render(texture?, options?) — friendly: draw `texture` (or the current
+  // source), auto-sizing to the first input frame when setSize() was never
+  // called and advancing the frame counter internally.
+  async render(input, options = {}) {
+    if (typeof input === "number") {
+      return this.renderTexture(this.source, input, options);
+    }
+    const tex = input ?? this.source;
+    autoSizeToInput(this, tex);
+    const { frame } = autoFrameTick(this);
+    return this.renderTexture(tex, frame, options);
   }
 
   dispose() {

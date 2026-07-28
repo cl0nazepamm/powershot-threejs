@@ -4,6 +4,9 @@ Fine-grained controls, linear/HDR input, `THREE.RenderPipeline` integration, rea
 
 ## Controls shared by every mode
 
+- `setPreset(nameOrObject)` - the friendly preset entry point on every pipeline (`Pipeline`, `FilmPipeline`, `InfraredPipeline`, `NightshotPipeline`). Accepts a preset key string or a full preset object, returns the pipeline for chaining, and throws listing the valid keys on a typo. The classic function forms (`applyPreset(pipeline.ctx, preset)`, `applyFilmPreset`, `applyInfraredPreset`, `applyInfraredProfile`, `applyNightshotPreset`) remain fully supported and byte-identical in effect; note `setPreset` on `InfraredPipeline` applies the full *profile* (input mode, response calibration, halo shape, history reset), matching `applyInfraredProfile`.
+- `render(texture, options?)` - the friendly per-frame call: sizes the pipeline to the first input frame if `setSize()` was never called, advances an internal frame counter, and (for `InfraredPipeline` / `NightshotPipeline`) measures wall-clock `dt` for the temporal loops. The legacy form `render(frameNumber)` — drawing the current source with an explicit frame — still works unchanged.
+- `renderTexture(texture, frame, options)` - the deterministic expert call: you own the frame counter, `options.dt` (infrared/nightshot), and can pass `options.outputTarget` to render into a target instead of the canvas. Use this for reproducible output (e.g. A/B verification) — the friendly `render()` uses wall-clock time and is intentionally not deterministic.
 - `ctx.power.value` - blends between source and effect.
 - `setInputEncoding("linear")` - the source is a scene-linear HDR render target: input gain and the camera OETF are applied before the ISP, making it the imager (feed it with the renderer's tone mapping OFF). `FilmPipeline` takes the same flag (skips the sRGB decode; its own `exposure` is already in stops) — and for film, that linear deferred path is the intended setup: film fully replaces tonemap, so do not tone-map before it.
 - `setInputExposure(stops)` - scene-linear plate gain before the effect. Available on `Pipeline`, `InfraredPipeline`, and `NightshotPipeline`; NightShot forwards it to its sensor. This is separate from each mode's own exposure trim and intentionally absent from `FilmPipeline`, whose stock exposure remains authoritative.
@@ -82,8 +85,6 @@ import {
   FilmPipeline,
   InfraredPipeline,
   Pipeline,
-  PRESETS,
-  applyPreset,
   effectPass,
   filmPass,
   infraredPass,
@@ -94,8 +95,7 @@ const scenePass = pass(scene, camera);
 
 const powershot = new Pipeline(renderer);
 powershot.setMode("analog");
-powershot.setSize(width, height);
-applyPreset(powershot.ctx, PRESETS.powershot);
+powershot.setPreset("powershot");
 
 const renderPipeline = new THREE.RenderPipeline(renderer);
 renderPipeline.outputNode = powerShotPass(scenePass, powershot);
@@ -122,7 +122,7 @@ renderPipeline.outputNode = effectPass(scenePass, {
   createEffect: (renderer) => new Pipeline(renderer),
   configureEffect: (effect) => {
     effect.setMode("analog");
-    applyPreset(effect.ctx, PRESETS.powershot);
+    effect.setPreset("powershot");
   },
   resolutionScale: 0.75,
 });

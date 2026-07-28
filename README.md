@@ -25,7 +25,7 @@ Requires WebGPU.
 npm install powershot-threejs three
 ```
 
-Every mode works the same way: create a pipeline, apply a preset, render a texture through it. Pick your mode below and copy its section.
+Every mode works the same way: create a pipeline, pick a preset by name, call `render(texture)` every frame. Sizing, animation timing, and frame counting are automatic. Pick your mode below and copy its section.
 
 All snippets share this setup:
 
@@ -43,22 +43,24 @@ sceneRenderer.setRenderTarget(sceneTarget);
 sceneRenderer.render(scene, camera);
 sceneRenderer.setRenderTarget(null);
 
-powershot.renderTexture(sceneTarget.texture, frame);
+powershot.render(sceneTarget.texture);
 ```
+
+`render()` locks the internal processing resolution to the first frame it sees; call `setSize(w, h)` first to pick your own (e.g. a low authentic-camera resolution). When you need deterministic control — explicit frame numbers, fixed `dt`, an output render target — use `renderTexture(texture, frame, options)`; see [ADVANCED.md](ADVANCED.md).
 
 ## Digicam
 
 Mid-2000s point-and-shoot look: sensor noise, sharpening halos and JPEG blocks.
 
 ```js
-import { Pipeline, PRESETS, applyPreset } from "powershot-threejs";
+import { Pipeline } from "powershot-threejs";
 
 const powershot = new Pipeline(renderer);
 powershot.setMode("digital");
-powershot.setSize(width, height); // internal processing resolution
-applyPreset(powershot.ctx, PRESETS.powershot);
+powershot.setPreset("powershot");
 
-powershot.renderTexture(inputTexture, frame);
+// each frame:
+powershot.render(inputTexture);
 ```
 
 Presets: `cybershot`, `powershot`, `coolpix`, `exilim`, `ixus`.
@@ -68,14 +70,14 @@ Presets: `cybershot`, `powershot`, `coolpix`, `exilim`, `ixus`.
 VHS / camcorder look: chroma bleed, tracking errors, dropouts. Same `Pipeline` as digicam, different mode:
 
 ```js
-import { Pipeline, PRESETS, applyPreset } from "powershot-threejs";
+import { Pipeline } from "powershot-threejs";
 
 const powershot = new Pipeline(renderer);
 powershot.setMode("analog");
-powershot.setSize(width, height);
-applyPreset(powershot.ctx, PRESETS.powershot);
+powershot.setPreset("powershot");
 
-powershot.renderTexture(inputTexture, frame);
+// each frame:
+powershot.render(inputTexture);
 ```
 
 ## Film
@@ -87,18 +89,18 @@ Motion-picture film: a real negative-to-print chain with film stocks, grain, hal
 
 ```js
 import * as THREE from "three/webgpu";
-import { FilmPipeline, FILM_PRESETS, applyFilmPreset } from "powershot-threejs";
+import { FilmPipeline } from "powershot-threejs";
 
 const renderer = new THREE.WebGPURenderer({ canvas });
 await renderer.init();
 renderer.toneMapping = THREE.NoToneMapping;
 
 const film = new FilmPipeline(renderer);
-film.setSize(width, height);
 film.setInputEncoding("linear"); // input is scene-linear, not sRGB
-applyFilmPreset(film.ctx, FILM_PRESETS.kodak_500t);
+film.setPreset("kodak_500t");
 
-film.renderTexture(linearSceneTexture, frame);
+// each frame:
+film.render(linearSceneTexture);
 ```
 
 Stocks: `kodak_500t`, `kodak_200t`, `kodak_250d`, `kodak_50d`.
@@ -108,17 +110,13 @@ Stocks: `kodak_500t`, `kodak_200t`, `kodak_250d`, `kodak_50d`.
 Night-vision tube: local gain, intensifier halo, scintillation, tube vignette — tuned around a P45-style white phosphor tube.
 
 ```js
-import {
-  InfraredPipeline,
-  INFRARED_PRESETS,
-  applyInfraredPreset,
-} from "powershot-threejs";
+import { InfraredPipeline } from "powershot-threejs";
 
 const infrared = new InfraredPipeline(renderer);
-infrared.setSize(width, height);
-applyInfraredPreset(infrared.ctx, INFRARED_PRESETS.white_phosphor);
+infrared.setPreset("white_phosphor");
 
-infrared.renderTexture(inputTexture, frame, { dt: deltaSeconds });
+// each frame (frame timing for the tube's auto-brightness loop is automatic):
+infrared.render(inputTexture);
 ```
 
 ## NightShot
@@ -126,17 +124,13 @@ infrared.renderTexture(inputTexture, frame, { dt: deltaSeconds });
 Sony Handycam "NightShot": a camcorder CCD with the IR-cut filter flipped out — AGC breathing, heavy noise, hot eye reflections, vertical smear, green monochrome, then the analog tape path.
 
 ```js
-import {
-  NightshotPipeline,
-  NIGHTSHOT_PRESETS,
-  applyNightshotPreset,
-} from "powershot-threejs";
+import { NightshotPipeline } from "powershot-threejs";
 
 const nightshot = new NightshotPipeline(renderer);
-nightshot.setSize(width, height);
-applyNightshotPreset(nightshot, NIGHTSHOT_PRESETS.nightshot_plus);
+nightshot.setPreset("nightshot_plus");
 
-nightshot.renderTexture(inputTexture, frame, { dt: deltaSeconds });
+// each frame:
+nightshot.render(inputTexture);
 ```
 
 ## Solar Flares

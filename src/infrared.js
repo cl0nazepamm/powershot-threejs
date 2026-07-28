@@ -21,7 +21,12 @@ import {
   mix, max, min, dot, abs, floor, fract, sin, cos, sqrt, log, exp, step,
   smoothstep,
 } from "three/tsl";
-import { powershotLinearGrade } from "./pipeline.js";
+import {
+  autoFrameTick,
+  autoSizeToInput,
+  powershotLinearGrade,
+  resolvePreset,
+} from "./pipeline.js";
 
 const LUM709 = vec3(0.2126, 0.7152, 0.0722);
 const TAU = 6.2831853;
@@ -1041,6 +1046,15 @@ export class InfraredPipeline {
     this.dirty = true;
   }
 
+  // Accepts an INFRARED_PRESETS key ("white_phosphor") or a preset object.
+  // Applies the full profile — uniforms plus input mode, response calibration,
+  // halo shape, and a history reset. The classic applyInfraredPreset /
+  // applyInfraredProfile functions remain fully supported.
+  setPreset(preset) {
+    applyInfraredProfile(this, resolvePreset(INFRARED_PRESETS, preset, "infrared preset"));
+    return this;
+  }
+
   // "rgb" (default): simulate NIR from RGB. "nir": treat the source as a
   // linear photocathode response (e.g. a spectral tracer's NIR channel).
   setInputMode(mode) {
@@ -1278,8 +1292,18 @@ export class InfraredPipeline {
     }
   }
 
-  async render(frame, options = {}) {
-    this.renderTexture(this.source, frame, options);
+  // render(frame, options) — legacy: draw the current source with an explicit
+  // frame (and options.dt for the ABC loop).
+  // render(texture?, options?) — friendly: draw `texture` (or the current
+  // source) with auto size, frame, and measured wall-clock dt.
+  async render(input, options = {}) {
+    if (typeof input === "number") {
+      return this.renderTexture(this.source, input, options);
+    }
+    const tex = input ?? this.source;
+    autoSizeToInput(this, tex);
+    const { frame, dt } = autoFrameTick(this);
+    return this.renderTexture(tex, frame, { dt, ...options });
   }
 
   dispose() {
