@@ -726,8 +726,6 @@ function makeSceneRig(kind) {
   const controls = new OrbitControls(camera, els.canvas);
   controls.enableDamping = true;
   controls.dampingFactor = 0.06;
-  controls.autoRotate = true;
-  controls.autoRotateSpeed = 0.55;
   controls.target.set(...view.target);
   controls.minDistance = view.minDistance;
   controls.maxDistance = view.maxDistance;
