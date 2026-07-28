@@ -8,10 +8,10 @@ substitute for all flare phenomena.
 
 The shipped `Tronnier Heliar 100 mm` profile contains:
 
-- 24 strongest two-reflection ghost paths selected from 28 valid surface pairs.
+- 16 strongest two-reflection ghost paths selected from 28 valid surface pairs.
 - Three coating-aware transport wavelengths at 475, 550, and 650 nm.
-- 31 source-incidence bins from 0° through 30°.
-- A 17×17 entrance-pupil grid per path, wavelength, and incidence bin.
+- 21 source-incidence bins from 0° through 30°.
+- A 13×13 entrance-pupil grid per path, wavelength, and incidence bin.
 - Sensor position, aperture-plane position, housing radius, thin-film
   throughput, and finite-area pupil-to-sensor flux concentration.
 - A seven-blade Fraunhofer PSF generated from an energy-normalized complex-pupil FFT.
@@ -27,7 +27,10 @@ The shipped `Tronnier Heliar 100 mm` profile contains:
   keep the lens signature stable while avoiding a mathematically perfect star.
 - Three broad analytic veiling-glare lobes.
 
-The generated half-float transfer atlas is 9.84 MiB. Throughput and flux are
+The shipped half-float transfer atlas is 2.6 MiB;
+`npm run generate:flare-atlas:max` rebuilds the 9.84 MiB calibration-grade
+version (24 paths × 31 angles × 17² grid), and `--paths/--angles/--grid`
+override the tiers individually. Throughput and flux are
 log2-encoded in the asset to retain the energy range of good anti-reflection
 coatings, then decoded before additive HDR accumulation. Flux density is
 computed from finite pupil-cell and mapped sensor-triangle areas rather than a
@@ -132,9 +135,10 @@ flare.setAperture({
 
 The flare remains active outside the frame until the lens hood acceptance curve
 rejects it. `flare.settings.hoodAngleDeg` controls the fade beyond the atlas's
-30° incidence limit. Ghosts render at three-quarter resolution by default;
-diffraction remains full resolution and the veil renders at one-eighth
-resolution. The source-glare response is evaluated in the composite, so it
+30° incidence limit. Ghosts render at half resolution by default; diffraction
+keeps full pixel density inside a tightly bounded window around the PSF quad
+and the veil renders at one-sixteenth resolution. The source-glare response is
+evaluated in the composite, so it
 costs no render target and stays stable at any resolution. Its response curve
 sits between the starburst and the slow veil so the halo dims quickly behind an
 occluder while keeping a little forward scatter. Set `ghostResolutionScale: 1`

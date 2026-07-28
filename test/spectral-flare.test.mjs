@@ -48,11 +48,11 @@ async function loadAtlas() {
 
 test("shipped Heliar atlas has the expected dimensions and ranked paths", async () => {
   const profile = await loadAtlas();
-  assert.equal(profile.pathCount, 24);
+  assert.equal(profile.pathCount, 16);
   assert.equal(profile.wavelengthCount, 3);
-  assert.equal(profile.angleCount, 31);
-  assert.equal(profile.gridSize, 17);
-  assert.equal(profile.recordCount, 24 * 3 * 31 * 17 * 17);
+  assert.equal(profile.angleCount, 21);
+  assert.equal(profile.gridSize, 13);
+  assert.equal(profile.recordCount, 16 * 3 * 21 * 13 * 13);
   assert.equal(profile.log2Throughput, true);
   assert.equal(profile.log2Flux, true);
   assert.equal(profile.boundaryExtrapolated, true);
@@ -94,8 +94,11 @@ test("atlas transport contains finite, unclamped off-screen rays and valid optic
       positiveEnergyCount += 1;
     }
   }
-  assert.ok(validCount > 100_000);
-  assert.ok(offscreenCount > 1_000, "off-screen transport is preserved");
+  assert.ok(validCount > profile.recordCount * 0.1);
+  assert.ok(
+    offscreenCount > profile.recordCount * 0.001,
+    "off-screen transport is preserved",
+  );
   assert.equal(positiveEnergyCount, validCount);
 });
 

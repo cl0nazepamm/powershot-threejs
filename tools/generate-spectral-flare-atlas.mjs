@@ -13,9 +13,23 @@ import {
   traceGhostGrid,
 } from "./spectral-flare-optics.mjs";
 
-const GRID_SIZE = 17;
-const ANGLE_COUNT = 31;
-const PATH_COUNT = 24;
+// Shipped defaults trade faint ghost-tail fidelity for a ~4× smaller atlas.
+// Pass --max for the calibration-grade build (24 paths × 31 angles × 17² grid,
+// ~9.8 MiB), or override --paths/--angles/--grid individually.
+const ARGS = new Map(process.argv.slice(2)
+  .filter((arg) => arg.startsWith("--"))
+  .map((arg) => {
+    const eq = arg.indexOf("=");
+    return eq < 0 ? [arg.slice(2), true] : [arg.slice(2, eq), arg.slice(eq + 1)];
+  }));
+const MAX_QUALITY = ARGS.get("max") === true;
+const intArg = (name, lean, max) => {
+  const value = Number.parseInt(ARGS.get(name), 10);
+  return Number.isFinite(value) ? value : (MAX_QUALITY ? max : lean);
+};
+const GRID_SIZE = intArg("grid", 13, 17);
+const ANGLE_COUNT = intArg("angles", 21, 31);
+const PATH_COUNT = intArg("paths", 16, 24);
 const MAX_INCIDENCE_DEG = 30;
 const MAGIC = "PSFLARE";
 const HEADER_BYTES = 64;
@@ -162,6 +176,11 @@ function writeHalfArray(target, byteOffset, source) {
 async function generate(outputPath) {
   const lens = HELIAR_TRONNIER_100MM;
   const allPaths = enumerateTwoReflectionPaths(lens);
+  if (PATH_COUNT > allPaths.length) {
+    throw new RangeError(
+      `--paths=${PATH_COUNT} exceeds the ${allPaths.length} valid two-reflection paths.`,
+    );
+  }
   const pupilRadiusMm = lens.surfaces[0].semiApertureMm;
   const options = {
     lens,
@@ -252,9 +271,8 @@ async function generate(outputPath) {
   }
 }
 
-const outputArg = process.argv.find((arg) => arg.startsWith("--output="));
-const outputPath = outputArg
-  ? resolve(process.cwd(), outputArg.slice("--output=".length))
+const outputPath = typeof ARGS.get("output") === "string"
+  ? resolve(process.cwd(), ARGS.get("output"))
   : DEFAULT_OUTPUT;
 
 await generate(outputPath);
