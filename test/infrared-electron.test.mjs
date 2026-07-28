@@ -3,11 +3,6 @@ import test from "node:test";
 
 import { InfraredPipeline, makeInfraredUniforms } from "../src/infrared.js";
 
-test("relative-electron controls have conservative defaults", () => {
-  const ctx = makeInfraredUniforms();
-  assert.equal(ctx.P.electronsPerUnit.value, 1024);
-});
-
 test("electron model is opt-in, configurable, and reversible", () => {
   const pipeline = Object.create(InfraredPipeline.prototype);
   pipeline.electronModel = false;

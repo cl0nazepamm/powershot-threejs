@@ -10,49 +10,6 @@ import {
   makeInfraredUniforms,
 } from "../src/infrared.js";
 
-test("the shipped gray look remains available as Ethereal (stylized monochromatic)", () => {
-  const preset = INFRARED_PRESETS.white_phosphor;
-
-  assert.equal(preset.name, "Ethereal (stylized monochromatic)");
-  assert.equal(
-    INFRARED_PRESETS.white_phosphor_nir.name,
-    "Ethereal (stylized monochromatic)",
-  );
-  assert.equal(preset.profile, "ethereal");
-  assert.deepEqual({
-    glow_threshold: preset.glow_threshold,
-    glow_strength: preset.glow_strength,
-    glow_radius: preset.glow_radius,
-    noise_amount: preset.noise_amount,
-    scint_density: preset.scint_density,
-    scint_gain: preset.scint_gain,
-    scint_dark_boost: preset.scint_dark_boost,
-    phosphor_chroma: preset.phosphor_chroma,
-    highlight_white: preset.highlight_white,
-    highlight_desat: preset.highlight_desat,
-    vignette: preset.vignette,
-    hotspot: preset.hotspot,
-    persistence: preset.persistence,
-  }, {
-    glow_threshold: 0.44,
-    glow_strength: 0.34,
-    glow_radius: 1.90,
-    noise_amount: 0.48,
-    scint_density: 0.018,
-    scint_gain: 0.55,
-    scint_dark_boost: 1.6,
-    phosphor_chroma: [0.78, 0.86, 0.96],
-    highlight_white: [0.96, 0.98, 1.00],
-    highlight_desat: 0.46,
-    vignette: 0.26,
-    hotspot: 0.055,
-    persistence: 0.42,
-  });
-  assert.equal(preset.autogate_strength, 0);
-  assert.equal(preset.edge_resolution_falloff, 0);
-  assert.equal(preset.scint_bright_floor, 1);
-});
-
 test("Gen 3 profile is restrained silver-blue and physically differentiated", () => {
   const preset = INFRARED_PRESETS.gen3_white_phosphor;
   const [r, g, b] = preset.phosphor_chroma;

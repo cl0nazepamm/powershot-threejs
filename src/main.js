@@ -183,7 +183,7 @@ let busy = false;
 let freezeNoise = false;
 let outputBrightness = 0;
 let outputContrast = 0;
-let electronModelOn = false;
+let electronModelOn = true; // demo default: photoelectron shot noise on
 let electronsPerUnit = 1024;
 
 // The analog/tape sliders drive whichever camcorder path is on screen: the
@@ -241,6 +241,7 @@ async function init() {
   applyFilmPreset(filmPipeline.ctx, FILM_PRESETS[filmPresetKey]);
   applyInfraredProfile(infraredPipeline, INFRARED_PRESETS[infraredPresetKey]);
   applyNightshotPreset(nightshotPipeline, NIGHTSHOT_PRESETS[nightshotPresetKey]);
+  applyElectronModel();
   // land on the live 3D scene; the default photo lazy-loads on Source → file
   setActiveSource("day");
   syncEffectUI();
@@ -341,6 +342,7 @@ function wireInput() {
   });
   els.sourcesel.addEventListener("change", () => setActiveSource(els.sourcesel.value));
   els.flashlight.addEventListener("change", updateFlashlight);
+  window.addEventListener("resize", resizeForSource);
   els.electronmodel.addEventListener("click", () => {
     electronModelOn = !electronModelOn;
     applyElectronModel();
@@ -1003,6 +1005,20 @@ function resizeForSource() {
   let w = Math.max(2, Math.round(imgW * processFit * resolutionScale)); w -= w % 2;
   let h = Math.max(2, Math.round(imgH * processFit * resolutionScale)); h -= h % 2;
 
+  // Fit the display box into the stage while preserving aspect — the CSS
+  // max-width/max-height clamp axes independently, which stretched the image
+  // whenever the window was smaller than the computed display size.
+  const stage = els.canvas.parentElement;
+  if (stage) {
+    const cs = getComputedStyle(stage);
+    const availW = stage.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const availH = stage.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    if (availW > 0 && availH > 0) {
+      const windowFit = Math.min(1, availW / displayW, availH / displayH);
+      displayW = Math.max(2, Math.floor(displayW * windowFit));
+      displayH = Math.max(2, Math.floor(displayH * windowFit));
+    }
+  }
   renderer.setSize(w, h, false);
   els.canvas.style.width = `${displayW}px`;
   els.canvas.style.height = `${displayH}px`;

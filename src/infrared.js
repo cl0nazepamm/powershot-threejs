@@ -796,6 +796,10 @@ INFRARED_PRESETS.gen3_white_phosphor = {
   ...GEN3_SILVER_VISUAL,
   name: "Gen 3 White Phosphor · Silver Blue",
   input_mode: "rgb",
+  // dialed on the live demo: strong pseudo-NIR character, local shading left
+  // to the temporal ABC loop alone
+  nir_input: 0.75,
+  local_gain: 0,
   sensor_resolution: [...INFRARED_PRESETS.white_phosphor.sensor_resolution],
   spectral_mix: [...INFRARED_PRESETS.white_phosphor.spectral_mix],
   phosphor_chroma: [...GEN3_SILVER_VISUAL.phosphor_chroma],
