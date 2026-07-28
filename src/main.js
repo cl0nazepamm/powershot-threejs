@@ -6,6 +6,7 @@ import {
   InfraredPipeline, INFRARED_PRESETS, INFRARED_PRESET_KEYS,
   applyInfraredProfile,
   NightshotPipeline, NIGHTSHOT_PRESETS, applyNightshotPreset,
+  SolarFlarePipeline, HELIAR_TRONNIER_100MM, loadHeliarTronnierFlareProfile,
 } from "./index.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { attachCameraIlluminator, createDaylightScene, createNightScene } from "./demo-scenes.js";
@@ -184,6 +185,11 @@ let freezeNoise = false;
 let outputBrightness = 0;
 let outputContrast = 0;
 let electronModelOn = true; // demo default: photoelectron shot noise on
+let flarePipeline = null;      // Solar Flares on the daylight plate (film mode)
+let flareProfilePromise = null;
+let flareTarget = null;
+let flareLens = null;
+let flareFailed = false;
 let electronsPerUnit = 1024;
 
 // The analog/tape sliders drive whichever camcorder path is on screen: the
@@ -337,6 +343,7 @@ function wireInput() {
     // the scene NEVER changes with the signal mode — flipping NightShot →
     // Digital in the night yard is how you watch the IR flashlight vanish
     updateFlashlight();
+    if (activeSourceKind !== "file") setActiveSource(activeSourceKind);
     syncEffectUI(); // also seeds the analog sliders from the mode's tape path
     resizeForSource();
   });
@@ -761,6 +768,7 @@ function makeSceneRig(kind) {
   // no MSAA: the pipelines consume the plate well below 1600×1200, so the
   // downsample already band-limits the edges
   const rt = new THREE.RenderTarget(w, h, { ...DEFAULT_TARGET_OPTIONS, depthBuffer: true });
+  if (kind === "day") rt.depthTexture = new THREE.DepthTexture(w, h); // solar occlusion
   rt.texture.userData.w = w;
   rt.texture.userData.h = h;
   rt.texture.userData.label = kind === "day" ? "scene-daylight" : "scene-night";
@@ -825,6 +833,73 @@ function activateTexture(tex, kind) {
   resizeForSource();
 }
 
+// ── Solar Flares on the daylight plate ──────────────────────────────
+// Film photographs the flare — the scene-linear optical pass runs BEFORE the
+// negative sees the plate, never composited on after. Film mode only; the
+// other modes read the raw plate. The Heliar atlas loads async and frames
+// pass through untouched until it is ready.
+function flareActive() {
+  return mode === "film" && activeSourceKind === "day" && !flareFailed;
+}
+
+function ensureFlarePipeline() {
+  if (flareFailed || flarePipeline || flareProfilePromise) return;
+  flareProfilePromise = loadHeliarTronnierFlareProfile()
+    .then((profile) => {
+      flareLens = { ...HELIAR_TRONNIER_100MM };
+      flarePipeline = new SolarFlarePipeline(renderer, {
+        profile,
+        ownsProfile: true,
+        lens: flareLens,
+      });
+      const [w, h] = SCENE_RT_SIZE;
+      flareTarget = new THREE.RenderTarget(w, h, { ...DEFAULT_TARGET_OPTIONS });
+      flareTarget.texture.userData.w = w;
+      flareTarget.texture.userData.h = h;
+      flareTarget.texture.userData.label = "scene-daylight";
+      flareTarget.texture.userData.isSceneRT = true;
+      if (flareActive()) setActiveSource("day"); // swap the flared plate in
+    })
+    .catch((error) => {
+      flareFailed = true;
+      console.warn("Solar Flares atlas load failed; flare disabled", error);
+    });
+}
+
+function renderFlareOntoPlate(rig) {
+  if (!flarePipeline) { ensureFlarePipeline(); return null; }
+  const flare = flarePipeline;
+  // Angular fit (ported from the maxjs integration): the Heliar profile is a
+  // 100 mm lens — on this wide demo camera its pattern would render at true
+  // angular size (ghosts compressed near centre, few-pixel starburst). Scale
+  // the virtual sensor gate and diffraction window so the pattern spans the
+  // frame the way it does on the profile's own 36×24 gate, while the
+  // aperture/housing optics stay in real Heliar millimetres.
+  const projectionY = Math.abs(rig.camera.projectionMatrix.elements[5]) || 1;
+  const fit = (2 * HELIAR_TRONNIER_100MM.focalLengthMm / HELIAR_TRONNIER_100MM.sensorHeightMm)
+    / projectionY;
+  flareLens.sensorWidthMm = HELIAR_TRONNIER_100MM.sensorWidthMm * fit;
+  flareLens.sensorHeightMm = HELIAR_TRONNIER_100MM.sensorHeightMm * fit;
+  flare.settings.diffractionScale = fit;
+  flare.setAperture({ fNumber: 8 }); // re-derives diffraction extent from the fit
+  try {
+    const ok = flare.renderTexture(rig.rt.texture, frame, {
+      camera: rig.camera,
+      sun: rig.sun,
+      depthTexture: rig.rt.depthTexture,
+      width: SCENE_RT_SIZE[0],
+      height: SCENE_RT_SIZE[1],
+      outputTarget: flareTarget,
+    });
+    return ok === true ? flareTarget.texture : null;
+  } catch (error) {
+    flareFailed = true;
+    console.warn("Solar Flares render failed; flare disabled", error);
+    if (activeSourceKind === "day") setActiveSource("day"); // back to the raw plate
+    return null;
+  }
+}
+
 function setActiveSource(kind) {
   if (kind === "file") {
     if (fileSource) activateTexture(fileSource, "file");
@@ -832,7 +907,8 @@ function setActiveSource(kind) {
     return;
   }
   const rig = sceneRigs[kind] ?? (sceneRigs[kind] = makeSceneRig(kind));
-  activateTexture(rig.texture, kind);
+  const flared = kind === "day" && flareActive() && flareTarget;
+  activateTexture(flared ? flareTarget.texture : rig.texture, kind);
   setStatus(`3D scene · ${kind === "day" ? "daylight" : "night"}\ndrag to orbit · scroll to zoom`);
 }
 
@@ -1116,6 +1192,7 @@ async function tick() {
     renderer.setRenderTarget(sceneRig.rt);
     renderer.render(sceneRig.scene, sceneRig.camera);
     renderer.setRenderTarget(null);
+    if (sceneRig.kind === "day" && flareActive()) renderFlareOntoPlate(sceneRig);
   }
 
   // re-upload the current video frame while it plays (or once after a seek)
