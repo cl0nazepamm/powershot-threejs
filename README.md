@@ -25,9 +25,51 @@ Requires WebGPU.
 npm install powershot-threejs three
 ```
 
-Every mode works the same way: create a pipeline, pick a preset by name, call `render(texture)` every frame. Sizing, animation timing, and frame counting are automatic. Pick your mode below and copy its section.
+## Drop it on your scene (default workflow)
 
-All snippets share this setup:
+Every effect is a `THREE.RenderPipeline` output-node pass — wrap the node
+chain you already have and you're done. Sizing, frame counting, and per-frame
+bookkeeping are automatic:
+
+```js
+import * as THREE from "three/webgpu";
+import { pass } from "three/tsl";
+import { Pipeline, powerShotPass } from "powershot-threejs";
+
+const renderer = new THREE.WebGPURenderer({ canvas });
+await renderer.init();
+
+const powershot = new Pipeline(renderer);
+powershot.setMode("analog");            // or "digital"
+powershot.setPreset("powershot");
+powershot.setInputEncoding("linear");   // a raw scene pass carries linear light
+
+const renderPipeline = new THREE.RenderPipeline(renderer);
+renderPipeline.outputNode = powerShotPass(pass(scene, camera), powershot);
+
+function animate() {
+  renderPipeline.render();
+}
+```
+
+`filmPass`, `infraredPass`, `nightshotPass`, and `solarFlarePass` work exactly
+the same way, and any existing output node can stand in for the scene pass —
+stack your own manipulations first and put the camera last. Two rules:
+
+- **Film replaces the tonemap.** `filmPass` must be the only display transform
+  in the chain (no ACES / AgX before it) and wants `setInputEncoding("linear")`.
+- Feeding an already display-referred chain (post-tonemap manipulations)?
+  Skip `setInputEncoding` — the default expects encoded input.
+
+Adapters auto-size to the source; pass `{ autoSize: false }` or
+`{ resolutionScale }` to manage effect resolution yourself. See
+[ADVANCED.md](ADVANCED.md) for the full adapter contract.
+
+## Processing images and videos
+
+The same pipelines also run standalone on any texture: create a pipeline, pick
+a preset by name, call `render(texture)` every frame. Pick your mode below and
+copy its section. All snippets share this setup:
 
 ```js
 import * as THREE from "three/webgpu";
@@ -36,17 +78,12 @@ const renderer = new THREE.WebGPURenderer({ canvas });
 await renderer.init();
 ```
 
-The input texture can be an image, a video, or your scene. For a normal Three.js scene, render into a `THREE.RenderTarget` and pass `target.texture`:
-
-```js
-sceneRenderer.setRenderTarget(sceneTarget);
-sceneRenderer.render(scene, camera);
-sceneRenderer.setRenderTarget(null);
-
-powershot.render(sceneTarget.texture);
-```
-
-`render()` locks the internal processing resolution to the first frame it sees; call `setSize(w, h)` first to pick your own (e.g. a low authentic-camera resolution). When you need deterministic control — explicit frame numbers, fixed `dt`, an output render target — use `renderTexture(texture, frame, options)`; see [ADVANCED.md](ADVANCED.md).
+The input texture can be an image, a video, or a render target's `.texture`.
+`render()` locks the internal processing resolution to the first frame it
+sees; call `setSize(w, h)` first to pick your own (e.g. a low
+authentic-camera resolution). When you need deterministic control — explicit
+frame numbers, fixed `dt`, an output render target — use
+`renderTexture(texture, frame, options)`; see [ADVANCED.md](ADVANCED.md).
 
 ## Digicam
 

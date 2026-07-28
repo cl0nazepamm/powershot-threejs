@@ -9,6 +9,7 @@ import {
 
 import { FilmPipeline } from "./film.js";
 import { InfraredPipeline } from "./infrared.js";
+import { NightshotPipeline } from "./nightshot.js";
 import { Pipeline } from "./pipeline.js";
 import { SolarFlarePipeline } from "./solar-flare.js";
 
@@ -295,6 +296,15 @@ export class InfraredPassNode extends EffectPassNode {
   }
 }
 
+export class NightshotPassNode extends EffectPassNode {
+  constructor(inputNode, pipeline = null, options = {}) {
+    super(inputNode, pipeline, {
+      createEffect: (renderer) => new NightshotPipeline(renderer),
+      ...options,
+    });
+  }
+}
+
 /**
  * Scene-linear adapter for the physically based spectral lens flare.
  *
@@ -373,6 +383,13 @@ export function filmPass(inputNode, pipelineOrOptions = null, options = {}) {
 export function infraredPass(inputNode, pipelineOrOptions = null, options = {}) {
   const normalized = normalizeEffectArgs(pipelineOrOptions, options);
   return new InfraredPassNode(inputNode, normalized.effect, normalized.options);
+}
+
+export function nightshotPass(inputNode, pipelineOrOptions = null, options = {}) {
+  if (pipelineOrOptions && typeof pipelineOrOptions === "object" && !pipelineOrOptions.renderTexture) {
+    return new NightshotPassNode(inputNode, null, pipelineOrOptions);
+  }
+  return new NightshotPassNode(inputNode, pipelineOrOptions, options);
 }
 
 export function solarFlarePass(inputNode, flareOrOptions = null, options = {}) {

@@ -126,7 +126,7 @@ renderPipeline.outputNode = effectPass(scenePass, {
 });
 ```
 
-`powerShotPass()`, `filmPass()`, `infraredPass()`, and `effectPass()` accept any RenderPipeline-compatible output node, so existing node chains can be passed in place of `scenePass`. The adapter auto-sizes effects with `setSize(width, height)` by default; pass `{ autoSize: false }` if you manage effect resolution yourself. Remember film's rule still applies here: `filmPass` should be the only display transform in the chain and its input node must carry linear, un-tonemapped light.
+`powerShotPass()`, `filmPass()`, `infraredPass()`, `nightshotPass()`, and `effectPass()` accept any RenderPipeline-compatible output node, so existing node chains can be passed in place of `scenePass`. The adapter auto-sizes effects with `setSize(width, height)` by default; pass `{ autoSize: false }` if you manage effect resolution yourself. Remember film's rule still applies here: `filmPass` should be the only display transform in the chain and its input node must carry linear, un-tonemapped light.
 
 ## Structure
 
