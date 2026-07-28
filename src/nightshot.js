@@ -11,15 +11,13 @@
 //     Gen-3 tube's MCP - "uses infrared, but not as much as the tube"),
 //   - heavy shot/gain luma noise, hot-pixel pops (not MCP scintillation),
 //   - field lag / slow-shutter ghosting,
-//   - hot retro-reflections (the LED bounces straight back off glasses,
-//     jewellery, tapetum),
 //   - interline VERTICAL SMEAR columns under bright NIR speculars,
 //   - the camera's green monochrome rendering with a lifted murky floor,
 //   - and finally the camcorder's analog tape/signal path.
 //
 // COMPOSITION, not reimplementation: the InfraredPipeline already owns NIR
 // image formation (flux prepass from RGB or a true-NIR render, analysis,
-// temporal ABC, persistence, retro-flare, tinted display) - a NightShot
+// temporal ABC, persistence, tinted display) - a NightShot
 // preset re-purposes it as the CCD (chicken-wire off, scintillation ~ off,
 // local adaptation ~ off, gentle global ABC, green display chroma). Its
 // developed frame passes a dedicated interline-smear stage (below), then the
@@ -74,7 +72,6 @@ export const NIGHTSHOT_PRESETS = {
       glow_strength: 0.28,
       glow_radius: 1.3,
       glow_saturate: 1.1,
-      eye_strength: 0.9,     // LED retro-reflections: glasses/jewellery burn hot
       psf_sigma: 1.35,       // consumer optics
       chicken_amp: 0.0,      // no multifibre hex pattern on a CCD
       noise_amount: 0.5,

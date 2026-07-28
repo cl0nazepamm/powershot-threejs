@@ -298,7 +298,7 @@ function infraredOutputAlpha(sourceSample, effectColor) {
   return sourceAlpha.add(effectAlpha.mul(sourceAlpha.oneMinus())).clamp(0.0, 1.0);
 }
 
-function stAnalysis(nirTex, ctx, eyeMaskTex) {
+function stAnalysis(nirTex, ctx) {
   const nir = texture(nirTex, screenUV).r;
   const glowMask = smoothstep(
     ctx.P.glowThreshold,
@@ -311,8 +311,7 @@ function stAnalysis(nirTex, ctx, eyeMaskTex) {
   // brightness instead, and true-NIR inputs (unclamped Planck-tail sources)
   // would nuke the whole frame.
   const glowSource = min(nir.mul(glowMask), ctx.P.glowSaturate);
-  const mask = eyeMaskTex ? texture(eyeMaskTex, screenUV).r.clamp(0.0, 1.0) : float(0.0);
-  return vec4(nir, glowSource, glowSource.mul(mask), 1.0);
+  return vec4(nir, glowSource, 0.0, 1.0);
 }
 
 // Two-pass analysis blur. The adaptation mean (r) always uses the separable
@@ -405,12 +404,12 @@ function stAbcUpdate(analysisTex, gainPrevTex, ctx) {
 }
 
 function stDevelop(
-  srcTex, nirTex, ctx, analysisTex, abcGainTex, eyeMaskTex,
+  srcTex, nirTex, ctx, analysisTex, abcGainTex,
   stages, outputEncoding, electronModel,
 ) {
   const P = ctx.P;
   const sourceSample = texture(srcTex, screenUV);
-  const nirSharp = texture(nirTex, screenUV).r; // sharp, for eye local contrast
+  const nirSharp = texture(nirTex, screenUV).r; // sharp fallback when analysis is off
   const analysis = analysisTex ? texture(analysisTex, screenUV).rgb : vec3(nirSharp, 0.0, 0.0);
 
   // 1+7: photocathode signal, resolution-limited (soft).
@@ -452,27 +451,6 @@ function stDevelop(
   // past glowSaturate drives the halo core toward clip without growing its radius.
   if (stages.glow) {
     signal = signal.add(analysis.g.mul(P.glowStrength));
-  }
-
-  // 6: eyeshine / retroreflection (animal eyes, retroreflectors under the IR
-  // illuminator), with the optional eye-mask input.
-  if (stages.eyes) {
-    const localContrast = nirSharp.sub(analysis.r.mul(P.eyeLocalRatio)).max(0.0);
-    const eyeCore = smoothstep(
-      P.eyeThreshold,
-      P.eyeThreshold.add(P.eyeSoftness),
-      localContrast,
-    ).mul(P.eyeStrength);
-    signal = signal
-      .add(eyeCore.mul(P.eyeCoreStrength))
-      .add(eyeCore.mul(analysis.g).mul(P.eyeHaloStrength));
-
-    if (eyeMaskTex) {
-      const mask = texture(eyeMaskTex, screenUV).r.clamp(0.0, 1.0);
-      signal = signal
-        .add(analysis.b.mul(P.maskedEyeHalo).mul(P.eyeStrength))
-        .add(eyeCore.mul(mask).mul(P.maskedEyeCore));
-    }
   }
 
   // 8+9: device-locked chicken-wire, then sparse scintillation on top.
@@ -582,15 +560,6 @@ export function makeInfraredUniforms() {
       glowRadius: uniform(1.45),
       glowSaturate: uniform(1.5),
 
-      // eyeshine
-      eyeStrength: uniform(0.90),
-      eyeThreshold: uniform(0.30),
-      eyeSoftness: uniform(0.12),
-      eyeLocalRatio: uniform(1.15),
-      eyeCoreStrength: uniform(0.56),
-      eyeHaloStrength: uniform(0.50),
-      maskedEyeCore: uniform(0.90),
-      maskedEyeHalo: uniform(0.80),
 
       // resolution-limited optics
       psfSigma: uniform(0.75),
@@ -673,14 +642,6 @@ export const INFRARED_PRESETS = {
     glow_strength: 0.34,
     glow_radius: 1.90,
     glow_saturate: 1.5,
-    eye_strength: 0.78,
-    eye_threshold: 0.28,
-    eye_softness: 0.14,
-    eye_local_ratio: 1.15,
-    eye_core_strength: 0.50,
-    eye_halo_strength: 0.44,
-    masked_eye_core: 0.82,
-    masked_eye_halo: 0.68,
     psf_sigma: 0.92,
     edge_resolution_falloff: 0.0,
     chicken_amp: 0.012,
@@ -754,14 +715,6 @@ export const INFRARED_PRESETS = {
     glow_strength: 0.34,
     glow_radius: 1.90,
     glow_saturate: 1.5,
-    eye_strength: 0.78,
-    eye_threshold: 0.28,
-    eye_softness: 0.14,
-    eye_local_ratio: 1.15,
-    eye_core_strength: 0.50,
-    eye_halo_strength: 0.44,
-    masked_eye_core: 0.82,
-    masked_eye_halo: 0.68,
     psf_sigma: 0.92,
     edge_resolution_falloff: 0.0,
     chicken_amp: 0.012,
@@ -895,14 +848,6 @@ export function applyInfraredPreset(ctx, preset) {
   P.glowStrength.value = preset.glow_strength;
   P.glowRadius.value = preset.glow_radius;
   P.glowSaturate.value = preset.glow_saturate ?? 1.5;
-  P.eyeStrength.value = preset.eye_strength;
-  P.eyeThreshold.value = preset.eye_threshold;
-  P.eyeSoftness.value = preset.eye_softness;
-  P.eyeLocalRatio.value = preset.eye_local_ratio;
-  P.eyeCoreStrength.value = preset.eye_core_strength;
-  P.eyeHaloStrength.value = preset.eye_halo_strength;
-  P.maskedEyeCore.value = preset.masked_eye_core;
-  P.maskedEyeHalo.value = preset.masked_eye_halo;
   P.psfSigma.value = preset.psf_sigma;
   P.edgeResolutionFalloff.value = preset.edge_resolution_falloff ?? 0.0;
   P.chickenAmp.value = preset.chicken_amp;
@@ -954,7 +899,6 @@ export function applyInfraredProfile(pipeline, preset) {
 export const INFRARED_STAGE_DEFS = [
   { id: "adaptation", label: "Local gain adaptation" },
   { id: "glow", label: "Intensifier halo" },
-  { id: "eyes", label: "Retinal flare" },
   { id: "noise", label: "Tube scintillation" },
   { id: "display", label: "Phosphor display" },
 ];
@@ -994,9 +938,8 @@ export class InfraredPipeline {
     this.mesh.frustumCulled = false;
     this.quadScene.add(this.mesh);
 
-    this.enabled = new Set(["adaptation", "glow", "eyes", "noise", "display"]);
+    this.enabled = new Set(["adaptation", "glow", "noise", "display"]);
     this.source = null;
-    this.eyeMask = null;
     this.size = { w: 0, h: 0 };
     // "rgb": simulate NIR from an RGB frame. "nir": the source IS linear
     // photocathode response (single channel) - read raw, no decode, no heuristic.
@@ -1148,23 +1091,6 @@ export class InfraredPipeline {
     this.dirty = true;
   }
 
-  setEyeMask(textureObject) {
-    if (this.eyeMask === textureObject) return;
-    if (textureObject) {
-      textureObject.colorSpace = THREE.NoColorSpace;
-      textureObject.flipY = false;
-      textureObject.generateMipmaps = false;
-      textureObject.minFilter = THREE.LinearFilter;
-      textureObject.magFilter = THREE.LinearFilter;
-    }
-    this.eyeMask = textureObject || null;
-    this.dirty = true;
-  }
-
-  clearEyeMask() {
-    this.setEyeMask(null);
-  }
-
   clearHistory() {
     // The phosphor "boil" is stateless (it recomputes prior frames
     // analytically); the only history is the ABC gain state, reset to 1.0.
@@ -1190,11 +1116,10 @@ export class InfraredPipeline {
     const stages = {
       adaptation: this.enabled.has("adaptation"),
       glow: this.enabled.has("glow"),
-      eyes: this.enabled.has("eyes"),
       noise: this.enabled.has("noise"),
       display: this.enabled.has("display"),
     };
-    const needsAnalysis = stages.adaptation || stages.glow || stages.eyes;
+    const needsAnalysis = stages.adaptation || stages.glow;
 
     if (!this.abcInitMat) {
       this.abcInitMat = this._mat(vec4(1.0, 0.0, 0.0, 1.0));
@@ -1211,7 +1136,7 @@ export class InfraredPipeline {
 
     if (needsAnalysis) {
       this.steps.push({
-        material: this._mat(stAnalysis(this.rtNir.texture, this.ctx, this.eyeMask)),
+        material: this._mat(stAnalysis(this.rtNir.texture, this.ctx)),
         target: this.rtAnalysisA,
       });
       this.steps.push({
@@ -1248,7 +1173,6 @@ export class InfraredPipeline {
         this.ctx,
         needsAnalysis ? this.rtAnalysisA.texture : null,
         stages.adaptation ? this.rtGainA.texture : null,
-        this.eyeMask,
         stages,
         this.outputEncoding,
         this.electronModel,

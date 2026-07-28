@@ -52,9 +52,7 @@ Shipped stocks: `kodak_500t` (Vision3 500T → 2383 print), `kodak_200t` (Vision
 - `infrared.ctx.P.abcAttack.value` / `abcRecover` - temporal auto-brightness time constants (seconds); the whole image dims fast when a bright light enters frame and recovers slower after it leaves. Pass real `dt` into `renderTexture` for correct breathing.
 - `infrared.ctx.P.glowStrength.value` - broad intensifier halo amount.
 - `infrared.ctx.P.glowSaturate.value` - halo source clip; brighter sources saturate the halo core instead of growing its radius.
-- `infrared.ctx.P.eyeStrength.value` - compact highlight / eye flare amount.
 - `infrared.ctx.P.noiseAmount.value` - master monochrome sensor and phosphor noise.
-- `infrared.setEyeMask(maskTexture)` - optional aligned mask texture for eye/retinal flare regions.
 - `infrared.setInputEncoding("linear")` - the "rgb" source is a linear HDR render target rather than sRGB-encoded (avoids a double decode).
 - `infrared.setOutputEncoding("linear")` - emit linear output for a post stack that encodes at its own output stage.
 - `infrared.setHaloDisc(true)` - flat disc halo profile instead of a gaussian.

@@ -70,8 +70,6 @@ const els = {
   infraredglowval: document.getElementById("infraredglowval"),
   infraredglowthreshold: document.getElementById("infraredglowthreshold"),
   infraredglowthresholdval: document.getElementById("infraredglowthresholdval"),
-  infraredeyes: document.getElementById("infraredeyes"),
-  infraredeyesval: document.getElementById("infraredeyesval"),
   infrarednoise: document.getElementById("infrarednoise"),
   infrarednoiseval: document.getElementById("infrarednoiseval"),
   infraredvignette: document.getElementById("infraredvignette"),
@@ -86,8 +84,6 @@ const els = {
   nightshotresponseval: document.getElementById("nightshotresponseval"),
   nightshotsmear: document.getElementById("nightshotsmear"),
   nightshotsmearval: document.getElementById("nightshotsmearval"),
-  nightshoteyes: document.getElementById("nightshoteyes"),
-  nightshoteyesval: document.getElementById("nightshoteyesval"),
   nightshotnoise: document.getElementById("nightshotnoise"),
   nightshotnoiseval: document.getElementById("nightshotnoiseval"),
   nightshotvhs: document.getElementById("nightshotvhs"),
@@ -496,7 +492,6 @@ function wireInput() {
   wireInfraredSlider(els.infraredlocalgain, els.infraredlocalgainval, (v) => { IP().localGain.value = v; });
   wireInfraredSlider(els.infraredglow, els.infraredglowval, (v) => { IP().glowStrength.value = v; });
   wireInfraredSlider(els.infraredglowthreshold, els.infraredglowthresholdval, (v) => { IP().glowThreshold.value = v; });
-  wireInfraredSlider(els.infraredeyes, els.infraredeyesval, (v) => { IP().eyeStrength.value = v; });
   wireInfraredSlider(els.infrarednoise, els.infrarednoiseval, (v) => { IP().noiseAmount.value = v; });
   wireInfraredSlider(els.infraredvignette, els.infraredvignetteval, (v) => { IP().vignette.value = v; });
   wireInfraredSlider(els.infraredhotspot, els.infraredhotspotval, (v) => { IP().hotspot.value = v; });
@@ -514,7 +509,6 @@ function wireInput() {
   wireNightshotSlider(els.nightshotgamma, els.nightshotgammaval, (v) => { NS().inputGamma.value = v; });
   wireNightshotSlider(els.nightshotresponse, els.nightshotresponseval, (v) => { NS().nirInput.value = v; });
   wireNightshotSlider(els.nightshotsmear, els.nightshotsmearval, (v) => { nightshotPipeline.ctx.P.smear.value = v; });
-  wireNightshotSlider(els.nightshoteyes, els.nightshoteyesval, (v) => { NS().eyeStrength.value = v; });
   wireNightshotSlider(els.nightshotnoise, els.nightshotnoiseval, (v) => { NS().noiseAmount.value = v; });
   wireNightshotSlider(els.nightshotvhs, els.nightshotvhsval, (v) => { NSA().analogStrength.value = v; });
 
@@ -701,7 +695,6 @@ function syncEffectUI() {
   setSlider(els.infraredlocalgain, els.infraredlocalgainval, IP.localGain.value);
   setSlider(els.infraredglow, els.infraredglowval, IP.glowStrength.value);
   setSlider(els.infraredglowthreshold, els.infraredglowthresholdval, IP.glowThreshold.value);
-  setSlider(els.infraredeyes, els.infraredeyesval, IP.eyeStrength.value);
   setSlider(els.infrarednoise, els.infrarednoiseval, IP.noiseAmount.value);
   setSlider(els.infraredvignette, els.infraredvignetteval, IP.vignette.value);
   setSlider(els.infraredhotspot, els.infraredhotspotval, IP.hotspot.value);
@@ -711,7 +704,6 @@ function syncEffectUI() {
   setSlider(els.nightshotgamma, els.nightshotgammaval, NS.inputGamma.value);
   setSlider(els.nightshotresponse, els.nightshotresponseval, NS.nirInput.value);
   setSlider(els.nightshotsmear, els.nightshotsmearval, nightshotPipeline.ctx.P.smear.value);
-  setSlider(els.nightshoteyes, els.nightshoteyesval, NS.eyeStrength.value);
   setSlider(els.nightshotnoise, els.nightshotnoiseval, NS.noiseAmount.value);
   setSlider(els.nightshotvhs, els.nightshotvhsval, nightshotPipeline.cam.ctx.P.analogStrength.value);
 

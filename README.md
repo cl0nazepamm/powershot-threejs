@@ -121,7 +121,7 @@ infrared.render(inputTexture);
 
 ## NightShot
 
-Sony Handycam "NightShot": a camcorder CCD with the IR-cut filter flipped out — AGC breathing, heavy noise, hot eye reflections, vertical smear, green monochrome, then the analog tape path.
+Sony Handycam "NightShot": a camcorder CCD with the IR-cut filter flipped out — AGC breathing, heavy noise, vertical smear, green monochrome, then the analog tape path.
 
 ```js
 import { NightshotPipeline } from "powershot-threejs";
