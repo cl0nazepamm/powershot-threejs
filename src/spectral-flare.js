@@ -85,6 +85,7 @@ export const SPECTRAL_FLARE_DEFAULTS = Object.freeze({
   pupilImperfectionSeed: 11.73,
   psfStorageScale: 4096,
   ghostRadianceScale: 20,
+  retainCpuData: false,
 });
 
 const _drawingBufferSize = new THREE.Vector2();
@@ -403,6 +404,7 @@ export class SpectralLensFlarePipeline {
     this._projection = {};
     this._visibilityInitialized = false;
     this._visibilityCurrent = null;
+    this._cpuDataReleased = false;
 
     this.ctx = {
       sourceRadiance: uniform(1),
@@ -946,9 +948,39 @@ export class SpectralLensFlarePipeline {
         storageScale: this.settings.psfStorageScale,
       });
       this._psfNode.value = this._psf.texture;
+      if (this._cpuDataReleased) this._dropPsfCpuData();
     }
     this._updateDiffractionExtent();
     return this;
+  }
+
+  // The data textures are immutable after their first GPU upload; the CPU
+  // arrays (~12 MB for the atlas alone) only serve re-upload paths that never
+  // run here. Sharing one profile or a cached PSF entry across multiple
+  // renderers requires retainCpuData: true, since the second renderer would
+  // find the arrays already dropped.
+  _releaseStaticCpuData() {
+    if (this._cpuDataReleased || this.settings.retainCpuData === true) return;
+    try {
+      this._uploadAndDropCpuData(this.profile.textureA);
+      this._uploadAndDropCpuData(this.profile.textureB);
+      this._uploadAndDropCpuData(this._ghostWeightsTexture);
+      this._dropPsfCpuData();
+      this._cpuDataReleased = true;
+    } catch {
+      // Renderer backend not initialized yet; retry after the next frame.
+    }
+  }
+
+  _uploadAndDropCpuData(texture) {
+    if (!texture?.image?.data) return;
+    this.renderer.initTexture(texture);
+    texture.image.data = null;
+  }
+
+  _dropPsfCpuData() {
+    this._uploadAndDropCpuData(this._psf?.texture);
+    if (this._psf) this._psf.textureData = null;
   }
 
   setSize(width, height) {
@@ -1247,6 +1279,7 @@ export class SpectralLensFlarePipeline {
       this.quadMesh.material = this.compositeMaterial;
       renderer.setRenderTarget(options.outputTarget || null);
       renderer.render(this.quadScene, this.quadCamera);
+      this._releaseStaticCpuData();
       return true;
     } finally {
       THREE.RendererUtils.restoreRendererState(renderer, this._rendererState);

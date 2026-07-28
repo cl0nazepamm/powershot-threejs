@@ -208,6 +208,7 @@ export function generateDiffractionPsf({
   scatterStrength = 0.035,
   imperfectionSeed = 11.73,
   storageScale = 4096,
+  includeUnscaled = true,
 } = {}) {
   if (size < 32 || (size & (size - 1)) !== 0) {
     throw new RangeError("Diffraction PSF size must be a power of two >= 32.");
@@ -257,11 +258,11 @@ export function generateDiffractionPsf({
   let finalEnergy = 0;
   for (let i = 0; i < psf.length; i += 1) finalEnergy += psf[i];
   const normalize = 1 / Math.max(1e-30, finalEnergy);
-  const halfData = new Uint16Array(psf.length);
+  const halfData = includeUnscaled ? new Uint16Array(psf.length) : null;
   const textureData = new Uint16Array(psf.length);
   for (let i = 0; i < psf.length; i += 1) {
     const value = psf[i] * normalize;
-    halfData[i] = THREE.DataUtils.toHalfFloat(value);
+    if (halfData) halfData[i] = THREE.DataUtils.toHalfFloat(value);
     textureData[i] = THREE.DataUtils.toHalfFloat(value * safeStorageScale);
   }
 
@@ -302,7 +303,7 @@ export function createDiffractionPsfTexture(options = {}) {
     return cached;
   }
 
-  const generated = generateDiffractionPsf(options);
+  const generated = generateDiffractionPsf({ ...options, includeUnscaled: false });
   const texture = new THREE.DataTexture(
     generated.textureData,
     generated.size,
