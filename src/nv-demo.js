@@ -24,7 +24,7 @@ import * as THREE from "three/webgpu";
 import { dot, screenUV, texture, vec3, vec4 } from "three/tsl";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createSpectralTracer } from "speedball-gi/spectral-tracer";
-import { createNightScene } from "./demo-scenes.js";
+import { attachCameraIlluminator, createNightScene } from "./demo-scenes.js";
 import { createNirBand } from "./nir_band.js";
 import {
   InfraredPipeline, INFRARED_PRESETS, applyInfraredProfile,
@@ -66,33 +66,19 @@ const START_MODE = params.get("mode") === "visible" ? "visible" : "nv";
 function buildScene() {
   // Shared night yard (src/demo-scenes.js) — material names and userData are
   // the classifier's ground truth, so the scene must come from one source.
-  ({ scene } = createNightScene());
+  const rig = createNightScene();
+  scene = rig.scene;
 
   // ── camera + THE IR ILLUMINATOR bolted to it ──────────────────────
-  camera = new THREE.PerspectiveCamera(58, 1, 0.1, 200);
-  camera.position.set(0.5, 1.8, 6.5);
-  scene.add(camera); // must be in-graph so the child light is collected
+  camera = new THREE.PerspectiveCamera(rig.view.fov, 1, rig.view.near, rig.view.far);
+  camera.position.set(...rig.view.position);
 
   // Black in RGB: contributes nothing in visible mode (its 850 nm band is
   // outside the visible λ domain AND its color is zero). Through the tube it
-  // is the on-camera floodlight every security camera / NV rig has.
-  irLight = new THREE.SpotLight(0x000000, 70, 0, 0.55, 0.45, 2);
-  irLight.userData.emitterClass = "ir";
-  irLight.position.set(0.15, -0.1, 0);
-  camera.add(irLight);
-  irLight.target.position.set(0, 0, -10);
-  camera.add(irLight.target);
-
-  // shadow maps only matter on the realtime raster path (the tracer shadows
-  // by tracing); the camera-mounted beam MUST be occluded or the trick dies
-  irLight.castShadow = true;
-  irLight.shadow.mapSize.set(1024, 1024);
-  irLight.shadow.camera.near = 0.2;
-  irLight.shadow.camera.far = 60;
-  irLight.shadow.bias = -0.0004;
-  irLight.shadow.normalBias = 0.02;
-  // mesh + scene-light shadow flags are set inside createNightScene(); the
-  // irLight above is added afterwards, so it keeps its own 1024 map config.
+  // is the on-camera floodlight every security camera / NV rig has. Its live
+  // shadow map matters on the realtime raster path (the tracer shadows by
+  // tracing); the camera-mounted beam MUST be occluded or the trick dies.
+  irLight = attachCameraIlluminator(scene, camera);
 }
 
 // ── realtime NIR band raster ─────────────────────────────────────────

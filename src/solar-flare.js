@@ -44,7 +44,7 @@ import {
 } from "./solar-flare-psf.js";
 
 const DEG2RAD = Math.PI / 180;
-const DEFAULT_SOLAR_DIAMETER_DEG = 0.533;
+export const DEFAULT_SOLAR_DIAMETER_DEG = 0.533;
 const REFERENCE_DIFFRACTION_NM = 550;
 const VISIBILITY_SAMPLES = Object.freeze([
   [0, 0],

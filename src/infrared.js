@@ -22,8 +22,7 @@ import {
   smoothstep,
 } from "three/tsl";
 import {
-  autoFrameTick,
-  autoSizeToInput,
+  autoRender,
   powershotLinearGrade,
   resolvePreset,
 } from "./pipeline.js";
@@ -1292,18 +1291,10 @@ export class InfraredPipeline {
     }
   }
 
-  // render(frame, options) — legacy: draw the current source with an explicit
-  // frame (and options.dt for the ABC loop).
-  // render(texture?, options?) — friendly: draw `texture` (or the current
-  // source) with auto size, frame, and measured wall-clock dt.
+  // See autoRender for the legacy/friendly overload contract (withDt: the
+  // friendly path measures dt for the temporal ABC loop).
   async render(input, options = {}) {
-    if (typeof input === "number") {
-      return this.renderTexture(this.source, input, options);
-    }
-    const tex = input ?? this.source;
-    autoSizeToInput(this, tex);
-    const { frame, dt } = autoFrameTick(this);
-    return this.renderTexture(tex, frame, { dt, ...options });
+    return autoRender(this, input, options, this.source, true);
   }
 
   dispose() {

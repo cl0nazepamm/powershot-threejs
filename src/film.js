@@ -28,8 +28,7 @@ import {
   step, smoothstep,
 } from "three/tsl";
 import {
-  autoFrameTick,
-  autoSizeToInput,
+  autoRender,
   powershotLinearGrade,
   resolvePreset,
 } from "./pipeline.js";
@@ -752,17 +751,9 @@ export class FilmPipeline {
     }
   }
 
-  // render(frame) — legacy: draw the current source with an explicit frame.
-  // render(texture?, options?) — friendly: draw `texture` (or the current
-  // source) with auto size and frame bookkeeping.
+  // See autoRender for the legacy/friendly overload contract.
   async render(input, options = {}) {
-    if (typeof input === "number") {
-      return this.renderTexture(this.source, input, options);
-    }
-    const tex = input ?? this.source;
-    autoSizeToInput(this, tex);
-    const { frame } = autoFrameTick(this);
-    return this.renderTexture(tex, frame, options);
+    return autoRender(this, input, options, this.source);
   }
 
   dispose() {

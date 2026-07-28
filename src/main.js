@@ -8,7 +8,8 @@ import {
   NightshotPipeline, NIGHTSHOT_PRESETS, applyNightshotPreset,
 } from "./index.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { createDaylightScene, createNightScene } from "./demo-scenes.js";
+import { attachCameraIlluminator, createDaylightScene, createNightScene } from "./demo-scenes.js";
+import { DEFAULT_TARGET_OPTIONS } from "./render-pipeline.js";
 
 const MAX_WORK = 1600; // cap working resolution for snappy realtime
 const ANALOG_WORK = [720, 540];
@@ -18,6 +19,8 @@ const els = {
   canvas: document.getElementById("view"),
   mode: document.getElementById("mode"),
   sourcesel: document.getElementById("sourcesel"),
+  flashlightRow: document.getElementById("flashlight-row"),
+  flashlight: document.getElementById("flashlight"),
   resolution: document.getElementById("resolution"),
   resolutionval: document.getElementById("resolutionval"),
   preset: document.getElementById("preset"),
@@ -154,6 +157,7 @@ const els = {
 };
 
 let renderer, pipeline, filmPipeline, infraredPipeline, nightshotPipeline, source = null;
+let pipelines = [];           // the four above, for fan-out calls
 let fileSource = null;        // last loaded image/video texture
 let activeSourceKind = "day"; // "day" | "night" | "file"
 const sceneRigs = {};         // kind -> { scene, camera, controls, rt, texture, ... }
@@ -211,6 +215,7 @@ async function init() {
   filmPipeline = new FilmPipeline(renderer);
   infraredPipeline = new InfraredPipeline(renderer);
   nightshotPipeline = new NightshotPipeline(renderer);
+  pipelines = [pipeline, filmPipeline, infraredPipeline, nightshotPipeline];
 
   buildPresetUI();
   buildFilmPresetUI();
@@ -218,13 +223,12 @@ async function init() {
   buildStageUI();
   wireInput();
 
-  await loadImage(DEFAULT_IMAGE);
   applyPreset(pipeline.ctx, PRESETS[presetKey]);
   applyFilmPreset(filmPipeline.ctx, FILM_PRESETS[filmPresetKey]);
   applyInfraredProfile(infraredPipeline, INFRARED_PRESETS[infraredPresetKey]);
   applyNightshotPreset(nightshotPipeline, NIGHTSHOT_PRESETS[nightshotPresetKey]);
-  // land on the live 3D scene; the loaded photo stays one Source-select away
-  setActiveSource(mode === "infrared" || mode === "nightshot" ? "night" : "day");
+  // land on the live 3D scene; the default photo lazy-loads on Source → file
+  setActiveSource("day");
   syncEffectUI();
 
   renderer.setAnimationLoop(tick);
@@ -315,17 +319,15 @@ function wireInput() {
   els.mode.addEventListener("change", () => {
     mode = els.mode.value;
     if (mode === "analog" || mode === "digital") pipeline.setMode(mode);
-    // night-vision modes pair with the night yard, the others with daylight —
-    // only while a 3D scene is the source; file sources are never hijacked
-    if (activeSourceKind !== "file") {
-      const wanted = mode === "infrared" || mode === "nightshot" ? "night" : "day";
-      if (wanted !== activeSourceKind) setActiveSource(wanted);
-    }
+    // the scene NEVER changes with the signal mode — flipping NightShot →
+    // Digital in the night yard is how you watch the IR flashlight vanish
+    updateFlashlight();
     syncModeUI();
     syncFreezeUI();
     resizeForSource();
   });
   els.sourcesel.addEventListener("change", () => setActiveSource(els.sourcesel.value));
+  els.flashlight.addEventListener("change", updateFlashlight);
   els.resolution.addEventListener("input", () => {
     resolutionScale = Math.min(1, Math.max(0.1, els.resolution.value / 100));
     els.resolutionval.textContent = `${resolutionScale.toFixed(2)}x`;
@@ -381,20 +383,19 @@ function wireInput() {
     pipeline.ctx.P.jpegHighlight.value = v;
     els.jpeghighlightval.textContent = v.toFixed(2);
   });
+  const applyOutputGrading = () => {
+    for (const p of pipelines) {
+      p.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
+    }
+  };
   els.brightness.addEventListener("input", () => {
     outputBrightness = els.brightness.value / 100;
-    pipeline.setOutputColorGrading({ brightness: outputBrightness, contrast: outputContrast });
-    filmPipeline.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
-    infraredPipeline.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
-    nightshotPipeline.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
+    applyOutputGrading();
     els.brightnessval.textContent = outputBrightness.toFixed(2);
   });
   els.contrast.addEventListener("input", () => {
     outputContrast = els.contrast.value / 100;
-    pipeline.setOutputColorGrading({ brightness: outputBrightness, contrast: outputContrast });
-    filmPipeline.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
-    infraredPipeline.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
-    nightshotPipeline.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
+    applyOutputGrading();
     els.contrastval.textContent = outputContrast.toFixed(2);
   });
   els.analog.addEventListener("input", () => {
@@ -726,63 +727,84 @@ function syncEffectUI() {
 function makeSceneRig(kind) {
   const [w, h] = SCENE_RT_SIZE;
   const rig = kind === "day" ? createDaylightScene() : createNightScene();
+  const view = rig.view;
 
-  const camera = new THREE.PerspectiveCamera(
-    kind === "day" ? 49 : 58, w / h, 0.1, kind === "day" ? 1400 : 200,
-  );
+  const camera = new THREE.PerspectiveCamera(view.fov, w / h, view.near, view.far);
+  camera.position.set(...view.position);
   const controls = new OrbitControls(camera, els.canvas);
   controls.enableDamping = true;
   controls.dampingFactor = 0.06;
   controls.autoRotate = true;
   controls.autoRotateSpeed = 0.55;
-  if (kind === "day") {
-    camera.position.set(14, 6, 24);
-    controls.target.set(0, 3.2, -4);
-    controls.minDistance = 8;
-    controls.maxDistance = 62;
-    controls.maxPolarAngle = Math.PI * 0.49;
-  } else {
-    camera.position.set(0.5, 1.8, 6.5);
-    controls.target.set(0, 1.1, -10);
-    controls.minDistance = 3;
-    controls.maxDistance = 30;
-    controls.maxPolarAngle = Math.PI * 0.52;
-  }
+  controls.target.set(...view.target);
+  controls.minDistance = view.minDistance;
+  controls.maxDistance = view.maxDistance;
+  controls.maxPolarAngle = view.maxPolarAngle;
   controls.enabled = false;
   controls.update();
 
-  const rt = new THREE.RenderTarget(w, h, {
-    type: THREE.HalfFloatType,
-    colorSpace: THREE.NoColorSpace,
-    minFilter: THREE.LinearFilter,
-    magFilter: THREE.LinearFilter,
-    depthBuffer: true,
-    samples: 4,
-  });
+  // no MSAA: the pipelines consume the plate well below 1600×1200, so the
+  // downsample already band-limits the edges
+  const rt = new THREE.RenderTarget(w, h, { ...DEFAULT_TARGET_OPTIONS, depthBuffer: true });
   rt.texture.userData.w = w;
   rt.texture.userData.h = h;
   rt.texture.userData.label = kind === "day" ? "scene-daylight" : "scene-night";
   rt.texture.userData.isSceneRT = true;
 
-  return { ...rig, kind, camera, controls, rt, texture: rt.texture };
+  // camera-mounted flashlight for the night yard (see updateFlashlight)
+  const flashlight = kind === "night"
+    ? attachCameraIlluminator(rig.scene, camera, { color: 0xffffff, intensity: 0 })
+    : null;
+
+  // The scenery is static and only the orbit camera moves, so the fixed
+  // lights' shadow maps are rendered once and frozen; only the camera-mounted
+  // flashlight keeps a live map.
+  rig.scene.traverse((o) => {
+    if (o.isLight && o.shadow && o !== flashlight) {
+      o.shadow.autoUpdate = false;
+      o.shadow.needsUpdate = true;
+    }
+  });
+
+  return { ...rig, kind, camera, controls, rt, texture: rt.texture, flashlight };
+}
+
+// The flashlight demonstrates spectral response, so its RGB-plate contribution
+// depends on which imager is looking at it:
+//   ir  — an 850 nm illuminator: pitch black to an IR-cut RGB sensor
+//         (digital / analog / film), a floodlight through the tube.
+//   led — a visible LED torch: bright to the eye, nearly dark through the
+//         tube (no incandescent Planck tail into NIR).
+function updateFlashlight() {
+  const f = sceneRigs.night?.flashlight;
+  if (!f) return;
+  const kind = els.flashlight.value;
+  const nv = mode === "infrared" || mode === "nightshot";
+  if (kind === "ir") {
+    f.color.setHex(0xffffff);
+    f.intensity = nv ? 70 : 0;
+  } else if (kind === "led") {
+    f.color.setHex(0xeef4ff);
+    f.intensity = nv ? 4 : 40;
+  } else {
+    f.intensity = 0;
+  }
+  f.userData.emitterClass = kind === "led" ? "led" : "ir";
+  f.castShadow = f.intensity > 0; // no shadow pass while the beam is dark
 }
 
 function activateTexture(tex, kind) {
   activeSourceKind = kind;
-  if (els.sourcesel.value !== kind) els.sourcesel.value = kind;
+  els.sourcesel.value = kind;
   source = tex;
   const encoding = kind === "file" ? "srgb" : "linear";
-  pipeline.setInputEncoding(encoding);
-  filmPipeline.setInputEncoding(encoding);
-  infraredPipeline.setInputEncoding(encoding);
-  nightshotPipeline.setInputEncoding(encoding);
-  pipeline.setSource(source);
-  filmPipeline.setSource(source);
-  infraredPipeline.setSource(source);
-  nightshotPipeline.setSource(source);
+  for (const p of pipelines) p.setInputEncoding(encoding);
+  for (const p of pipelines) p.setSource(source);
   for (const [k, rig] of Object.entries(sceneRigs)) rig.controls.enabled = k === kind;
   if (kind !== "file" && currentVideo && !currentVideo.paused) currentVideo.pause();
   els.videoControls.hidden = !(kind === "file" && currentVideo);
+  els.flashlightRow.hidden = kind !== "night";
+  updateFlashlight();
   resizeForSource();
 }
 
@@ -1056,10 +1078,10 @@ async function tick() {
   lastTickAt = tickNow;
 
   // render the active 3D scene into its plate target
-  const sceneRig = activeSourceKind === "file" ? null : sceneRigs[activeSourceKind];
+  const sceneRig = sceneRigs[activeSourceKind];
   if (sceneRig) {
     sceneRig.controls.update();
-    sceneRig.updateSunDisk?.(sceneRig.camera);
+    sceneRig.update(sceneRig.camera);
     renderer.setRenderTarget(sceneRig.rt);
     renderer.render(sceneRig.scene, sceneRig.camera);
     renderer.setRenderTarget(null);

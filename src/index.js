@@ -52,6 +52,7 @@ export {
 } from "./render-pipeline.js";
 
 export {
+  DEFAULT_SOLAR_DIAMETER_DEG,
   SOLAR_FLARE_DEFAULTS,
   SolarFlarePipeline,
   apertureSpikeHarmonic,

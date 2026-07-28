@@ -11,15 +11,47 @@
 //     the NV demo's three-band NIR classifier keys off them.
 
 import * as THREE from "three/webgpu";
+import { DEFAULT_SOLAR_DIAMETER_DEG } from "./solar-flare.js";
 
-export const SOLAR_DIAMETER_DEG = 0.533;
+export const SOLAR_DIAMETER_DEG = DEFAULT_SOLAR_DIAMETER_DEG;
 const SUN_DISTANCE = 700;
 
-// ── daylight farm (from flare-demo) ─────────────────────────────────
+// One MeshStandardMaterial factory for both scenes; `material` keeps the
+// daylight scene's positional style and defaults.
+function std(color, opts = {}) {
+  return new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0.0, ...opts });
+}
 
 function material(color, roughness = 0.82, metalness = 0) {
-  return new THREE.MeshStandardMaterial({ color, roughness, metalness });
+  return std(color, { roughness, metalness });
 }
+
+// Camera-mounted illuminator — the same physical prop in every demo that
+// straps a light to the lens (NV demo's 850 nm IR flood, main demo's
+// flashlight). Adds the camera to the scene graph so the child light is
+// collected, and configures the live 1024 shadow map the beam needs.
+export function attachCameraIlluminator(scene, camera, {
+  color = 0x000000, // black in RGB: invisible in visible-light renders
+  intensity = 70,
+  emitterClass = "ir",
+} = {}) {
+  scene.add(camera);
+  const light = new THREE.SpotLight(color, intensity, 0, 0.55, 0.45, 2);
+  light.userData.emitterClass = emitterClass;
+  light.position.set(0.15, -0.1, 0);
+  camera.add(light);
+  light.target.position.set(0, 0, -10); // beam follows the view
+  camera.add(light.target);
+  light.castShadow = true;
+  light.shadow.mapSize.set(1024, 1024);
+  light.shadow.camera.near = 0.2;
+  light.shadow.camera.far = 60;
+  light.shadow.bias = -0.0004;
+  light.shadow.normalBias = 0.02;
+  return light;
+}
+
+// ── daylight farm (from flare-demo) ─────────────────────────────────
 
 function shadowed(mesh) {
   mesh.castShadow = true;
@@ -252,15 +284,29 @@ export function createDaylightScene({ separateSunScene = false } = {}) {
 
   setSun(-152.5, 14.5);
 
-  return { scene, sunScene, sun, sunDisk, skyTexture, sunDirection, setSun, updateSunDisk };
+  return {
+    scene,
+    sunScene,
+    sun,
+    sunDisk,
+    setSun,
+    update: updateSunDisk, // per-frame hook: keep the disk centred on the eye
+    view: {
+      fov: 49,
+      near: 0.1,
+      far: 1400,
+      position: [14, 6, 24],
+      target: [0, 3.2, -4],
+      minDistance: 8,
+      maxDistance: 62,
+      maxPolarAngle: Math.PI * 0.49,
+    },
+  };
 }
 
 // ── night yard (from nv-demo) ───────────────────────────────────────
 
 export function createNightScene() {
-  const std = (color, opts = {}) =>
-    new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0.0, ...opts });
-
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x000000); // moonless night, no env
 
@@ -385,5 +431,18 @@ export function createNightScene() {
     }
   });
 
-  return { scene };
+  return {
+    scene,
+    update() {}, // per-frame hook (static yard; parity with the daylight rig)
+    view: {
+      fov: 58,
+      near: 0.1,
+      far: 200,
+      position: [0.5, 1.8, 6.5],
+      target: [0, 1.2, -10],
+      minDistance: 3,
+      maxDistance: 30,
+      maxPolarAngle: Math.PI * 0.52,
+    },
+  };
 }

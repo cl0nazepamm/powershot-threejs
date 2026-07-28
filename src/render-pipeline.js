@@ -12,7 +12,7 @@ import { InfraredPipeline } from "./infrared.js";
 import { Pipeline } from "./pipeline.js";
 import { SolarFlarePipeline } from "./solar-flare.js";
 
-const DEFAULT_TARGET_OPTIONS = {
+export const DEFAULT_TARGET_OPTIONS = {
   type: THREE.HalfFloatType,
   minFilter: THREE.LinearFilter,
   magFilter: THREE.LinearFilter,

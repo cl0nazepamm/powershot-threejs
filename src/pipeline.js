@@ -1162,7 +1162,7 @@ export function autoFrameTick(effect) {
 
 // Best-effort pixel dimensions of an image, video, or render-target texture.
 export function textureDimensions(texture) {
-  const img = texture?.image;
+  const img = texture?.image ?? texture?.source?.data;
   if (!img) return null;
   const w = img.videoWidth || img.width;
   const h = img.videoHeight || img.height;
@@ -1177,6 +1177,22 @@ export function autoSizeToInput(effect, tex) {
   if (effect.size.w !== 0 || effect.size.h !== 0) return;
   const dims = textureDimensions(tex);
   if (dims) effect.setSize(dims.w, dims.h);
+}
+
+// The one friendly render() overload every pipeline delegates to:
+//   render(frame, options?)     — legacy: draw `source` with an explicit frame.
+//   render(texture?, options?)  — friendly: draw `texture` (or `source`) with
+//                                 auto size and frame bookkeeping; withDt also
+//                                 supplies measured wall-clock dt (explicit
+//                                 options.dt wins).
+export function autoRender(effect, input, options, source, withDt = false) {
+  if (typeof input === "number") {
+    return effect.renderTexture(source, input, options);
+  }
+  const tex = input ?? source;
+  autoSizeToInput(effect, tex);
+  const { frame, dt } = autoFrameTick(effect);
+  return effect.renderTexture(tex, frame, withDt ? { dt, ...options } : options);
 }
 
 // ---------------------------------------------------------------------------
@@ -1465,18 +1481,9 @@ export class Pipeline {
     }
   }
 
-  // render(frame) — legacy: draw the current source with an explicit frame.
-  // render(texture?, options?) — friendly: draw `texture` (or the current
-  // source), auto-sizing to the first input frame when setSize() was never
-  // called and advancing the frame counter internally.
+  // See autoRender for the legacy/friendly overload contract.
   async render(input, options = {}) {
-    if (typeof input === "number") {
-      return this.renderTexture(this.source, input, options);
-    }
-    const tex = input ?? this.source;
-    autoSizeToInput(this, tex);
-    const { frame } = autoFrameTick(this);
-    return this.renderTexture(tex, frame, options);
+    return autoRender(this, input, options, this.source);
   }
 
   dispose() {

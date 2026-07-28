@@ -15,8 +15,6 @@ import {
 import { SOLAR_DIAMETER_DEG, createDaylightScene } from "./demo-scenes.js";
 
 const BASE_SUN_AZIMUTH_DEG = -152.5;
-const CAMERA_HOME = new THREE.Vector3(14, 6, 24);
-const TARGET_HOME = new THREE.Vector3(0, 3.2, -4);
 const USE_SCENE_DEPTH = new URLSearchParams(location.search).get("depth") !== "0";
 const SHOW_SUN_DISK = new URLSearchParams(location.search).get("disk") !== "0";
 
@@ -49,11 +47,8 @@ window.__solarFlareDebug = debug;
 
 let renderer;
 let rig;
-let scene;
-let sunScene;
 let camera;
 let controls;
-let sun;
 let flare;
 let renderPipeline;
 let sourcePass;
@@ -61,22 +56,20 @@ let frameFailed = false;
 
 function buildScene() {
   rig = createDaylightScene({ separateSunScene: true });
-  scene = rig.scene;
-  sunScene = rig.sunScene;
-  sun = rig.sun;
   rig.sunDisk.visible = SHOW_SUN_DISK;
 
-  camera = new THREE.PerspectiveCamera(49, 1, 0.1, 1400);
-  camera.position.copy(CAMERA_HOME);
-  camera.lookAt(TARGET_HOME);
+  const view = rig.view;
+  camera = new THREE.PerspectiveCamera(view.fov, 1, view.near, view.far);
+  camera.position.set(...view.position);
+  camera.lookAt(...view.target);
 
   controls = new OrbitControls(camera, canvas);
-  controls.target.copy(TARGET_HOME);
+  controls.target.set(...view.target);
   controls.enableDamping = true;
   controls.dampingFactor = 0.055;
-  controls.minDistance = 8;
-  controls.maxDistance = 62;
-  controls.maxPolarAngle = Math.PI * 0.49;
+  controls.minDistance = view.minDistance;
+  controls.maxDistance = view.maxDistance;
+  controls.maxPolarAngle = view.maxPolarAngle;
   controls.update();
 
   updateSun();
@@ -85,7 +78,7 @@ function buildScene() {
 function updateSun() {
   if (!rig || !camera) return;
   rig.setSun(BASE_SUN_AZIMUTH_DEG + parameters.sunAngle, parameters.sunElevation);
-  rig.updateSunDisk(camera);
+  rig.update(camera);
 }
 
 function setFailure(error) {
@@ -141,8 +134,8 @@ function bindControls() {
   bindRange("visibility", (value) => `${Math.round(value * 100)}%`);
 
   canvas.addEventListener("dblclick", () => {
-    camera.position.copy(CAMERA_HOME);
-    controls.target.copy(TARGET_HOME);
+    camera.position.set(...rig.view.position);
+    controls.target.set(...rig.view.target);
     controls.update();
   });
 }
@@ -182,7 +175,7 @@ async function init() {
   flare = new SolarFlarePipeline(renderer, {
     profile,
     camera,
-    sun,
+    sun: rig.sun,
     fNumber: parameters.fNumber,
     apertureBlades: 7,
     apertureRoundness: 0.08,
@@ -193,20 +186,20 @@ async function init() {
   });
   flare.setAperture({ fNumber: parameters.fNumber, blades: 7, roundness: 0.08 });
 
-  sourcePass = pass(scene, camera);
+  sourcePass = pass(rig.scene, camera);
   const depthTexture = sourcePass.getTexture("depth");
   const depthNode = sourcePass.getTextureNode("depth");
   const skyMask = renderer.reversedDepthBuffer
     ? float(1).sub(step(0.00001, depthNode.r))
     : step(0.99999, depthNode.r);
-  const sunPass = pass(sunScene, camera, { depthBuffer: false });
+  const sunPass = pass(rig.sunScene, camera, { depthBuffer: false });
   const sceneWithSun = vec4(
     sourcePass.rgb.add(sunPass.rgb.mul(skyMask)),
     sourcePass.a,
   );
   const flareNode = solarFlarePass(sceneWithSun, flare, {
     camera,
-    sun,
+    sun: rig.sun,
     depthTexture: () => (USE_SCENE_DEPTH ? depthTexture : null),
     visibility: () => parameters.visibility,
     angularDiameterDeg: SOLAR_DIAMETER_DEG,

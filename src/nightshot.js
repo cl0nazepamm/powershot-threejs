@@ -35,8 +35,7 @@ import { InfraredPipeline, INFRARED_PRESETS, applyInfraredPreset } from "./infra
 import {
   Pipeline,
   applyPreset as applyCameraPreset,
-  autoFrameTick,
-  autoSizeToInput,
+  autoRender,
   resolvePreset,
 } from "./pipeline.js";
 import { PRESETS } from "./presets.js";
@@ -295,17 +294,9 @@ export class NightshotPipeline {
     return this.cam.renderTexture(camSource.texture, frame, { outputTarget }) === true;
   }
 
-  // render(frame, options) — legacy: draw the current source with an explicit
-  // frame. render(texture?, options?) — friendly: draw `texture` (or the
-  // current source) with auto size, frame, and measured wall-clock dt.
+  // See autoRender for the legacy/friendly overload contract.
   async render(input, options = {}) {
-    if (typeof input === "number") {
-      return this.renderTexture(this.ir.source, input, options);
-    }
-    const tex = input ?? this.ir.source;
-    autoSizeToInput(this, tex);
-    const { frame, dt } = autoFrameTick(this);
-    return this.renderTexture(tex, frame, { dt, ...options });
+    return autoRender(this, input, options, this.ir.source, true);
   }
 
   clearHistory() {
