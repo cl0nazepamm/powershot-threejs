@@ -293,6 +293,13 @@
         <label for="infraredhotspot">IR hotspot · <span id="infraredhotspotval">0.10</span></label>
         <input id="infraredhotspot" type="range" min="0" max="100" value="10">
       </div>
+
+      <div>
+        <label for="electrons">Photoelectrons / unit · <span id="electronsval">1024</span></label>
+        <input id="electrons" type="range" min="64" max="4096" step="64" value="1024">
+      </div>
+
+      <button id="electronmodel">photoelectron model · off</button>
     </div>
 
     <div id="nightshot-controls" hidden>
@@ -319,11 +326,6 @@
       <div>
         <label for="nightshotnoise">CCD noise · <span id="nightshotnoiseval">0.50</span></label>
         <input id="nightshotnoise" type="range" min="0" max="200" value="50">
-      </div>
-
-      <div>
-        <label for="nightshotvhs">Tape amount · <span id="nightshotvhsval">1.15</span></label>
-        <input id="nightshotvhs" type="range" min="0" max="300" value="115">
       </div>
     </div>
 

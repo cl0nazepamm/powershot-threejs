@@ -86,8 +86,9 @@ const els = {
   nightshotsmearval: document.getElementById("nightshotsmearval"),
   nightshotnoise: document.getElementById("nightshotnoise"),
   nightshotnoiseval: document.getElementById("nightshotnoiseval"),
-  nightshotvhs: document.getElementById("nightshotvhs"),
-  nightshotvhsval: document.getElementById("nightshotvhsval"),
+  electrons: document.getElementById("electrons"),
+  electronsval: document.getElementById("electronsval"),
+  electronmodel: document.getElementById("electronmodel"),
   lens: document.getElementById("lens"),
   lensval: document.getElementById("lensval"),
   bloom: document.getElementById("bloom"),
@@ -182,6 +183,13 @@ let busy = false;
 let freezeNoise = false;
 let outputBrightness = 0;
 let outputContrast = 0;
+let electronModelOn = false;
+let electronsPerUnit = 1024;
+
+// The analog/tape sliders drive whichever camcorder path is on screen: the
+// classic Pipeline in analog mode, or NightShot's internal tape stage — the
+// same wiring maxjs uses, so NightShot exposes the full VHS control set.
+const activeAnalogP = () => (mode === "nightshot" ? nightshotPipeline.cam : pipeline).ctx.P;
 
 // fps tracking
 let fpsLast = performance.now();
@@ -189,6 +197,16 @@ let fpsCount = 0;
 let fps = 0;
 
 function setStatus(msg) { els.status.textContent = msg; }
+
+// Opt-in photoelectron shot noise on the tube's input (same wiring as maxjs:
+// electronsPerUnit maps relative response 1.0 to an expected electron count).
+function applyElectronModel() {
+  infraredPipeline.setElectronModel(electronModelOn ? { electronsPerUnit } : false);
+  els.electronmodel.textContent = electronModelOn
+    ? "photoelectron model · on"
+    : "photoelectron model · off";
+  els.electronmodel.classList.toggle("active", electronModelOn);
+}
 
 async function init() {
   if (!navigator.gpu) {
@@ -318,12 +336,20 @@ function wireInput() {
     // the scene NEVER changes with the signal mode — flipping NightShot →
     // Digital in the night yard is how you watch the IR flashlight vanish
     updateFlashlight();
-    syncModeUI();
-    syncFreezeUI();
+    syncEffectUI(); // also seeds the analog sliders from the mode's tape path
     resizeForSource();
   });
   els.sourcesel.addEventListener("change", () => setActiveSource(els.sourcesel.value));
   els.flashlight.addEventListener("change", updateFlashlight);
+  els.electronmodel.addEventListener("click", () => {
+    electronModelOn = !electronModelOn;
+    applyElectronModel();
+  });
+  els.electrons.addEventListener("input", () => {
+    electronsPerUnit = Number(els.electrons.value);
+    els.electronsval.textContent = String(electronsPerUnit);
+    if (electronModelOn) applyElectronModel();
+  });
   els.resolution.addEventListener("input", () => {
     resolutionScale = Math.min(1, Math.max(0.1, els.resolution.value / 100));
     els.resolutionval.textContent = `${resolutionScale.toFixed(2)}x`;
@@ -396,57 +422,57 @@ function wireInput() {
   });
   els.analog.addEventListener("input", () => {
     const v = els.analog.value / 100;
-    pipeline.ctx.P.analogStrength.value = v;
+    activeAnalogP().analogStrength.value = v;
     els.analogval.textContent = v.toFixed(2);
   });
   els.tracking.addEventListener("input", () => {
     const v = els.tracking.value / 100;
-    pipeline.ctx.P.analogTracking.value = v;
+    activeAnalogP().analogTracking.value = v;
     els.trackingval.textContent = v.toFixed(2);
   });
   els.trackingchoppiness.addEventListener("input", () => {
     const v = els.trackingchoppiness.value / 100;
-    pipeline.ctx.P.analogTrackingChoppiness.value = v;
+    activeAnalogP().analogTrackingChoppiness.value = v;
     els.trackingchoppinessval.textContent = v.toFixed(2);
   });
   els.chromableed.addEventListener("input", () => {
     const v = els.chromableed.value / 100;
-    pipeline.ctx.P.analogChromaBleed.value = v;
+    activeAnalogP().analogChromaBleed.value = v;
     els.chromableedval.textContent = v.toFixed(2);
   });
   els.ringing.addEventListener("input", () => {
     const v = els.ringing.value / 100;
-    pipeline.ctx.P.analogRinging.value = v;
+    activeAnalogP().analogRinging.value = v;
     els.ringingval.textContent = v.toFixed(2);
   });
   els.tapenoise.addEventListener("input", () => {
     const v = els.tapenoise.value / 100;
-    pipeline.ctx.P.analogTapeNoise.value = v;
+    activeAnalogP().analogTapeNoise.value = v;
     els.tapenoiseval.textContent = v.toFixed(2);
   });
   els.bandmask.addEventListener("input", () => {
     const v = els.bandmask.value / 100;
-    pipeline.ctx.P.analogBandMask.value = v;
+    activeAnalogP().analogBandMask.value = v;
     els.bandmaskval.textContent = v.toFixed(2);
   });
   els.edgewave.addEventListener("input", () => {
     const v = els.edgewave.value / 100;
-    pipeline.ctx.P.analogEdgeWave.value = v;
+    activeAnalogP().analogEdgeWave.value = v;
     els.edgewaveval.textContent = v.toFixed(2);
   });
   els.dropouts.addEventListener("input", () => {
     const v = els.dropouts.value / 100;
-    pipeline.ctx.P.analogDropouts.value = v;
+    activeAnalogP().analogDropouts.value = v;
     els.dropoutsval.textContent = v.toFixed(2);
   });
   els.scanlines.addEventListener("input", () => {
     const v = els.scanlines.value / 100;
-    pipeline.ctx.P.analogScanlines.value = v;
+    activeAnalogP().analogScanlines.value = v;
     els.scanlinesval.textContent = v.toFixed(2);
   });
   els.headswitch.addEventListener("input", () => {
     const v = els.headswitch.value / 100;
-    pipeline.ctx.P.analogHeadSwitch.value = v;
+    activeAnalogP().analogHeadSwitch.value = v;
     els.headswitchval.textContent = v.toFixed(2);
   });
 
@@ -504,13 +530,11 @@ function wireInput() {
     });
   };
   const NS = () => nightshotPipeline.ir.ctx.P;
-  const NSA = () => nightshotPipeline.cam.ctx.P;
   wireNightshotSlider(els.nightshotexposure, els.nightshotexposureval, (v) => { NS().exposure.value = v; });
   wireNightshotSlider(els.nightshotgamma, els.nightshotgammaval, (v) => { NS().inputGamma.value = v; });
   wireNightshotSlider(els.nightshotresponse, els.nightshotresponseval, (v) => { NS().nirInput.value = v; });
   wireNightshotSlider(els.nightshotsmear, els.nightshotsmearval, (v) => { nightshotPipeline.ctx.P.smear.value = v; });
   wireNightshotSlider(els.nightshotnoise, els.nightshotnoiseval, (v) => { NS().noiseAmount.value = v; });
-  wireNightshotSlider(els.nightshotvhs, els.nightshotvhsval, (v) => { NSA().analogStrength.value = v; });
 
   els.freeze.addEventListener("click", () => {
     freezeNoise = !freezeNoise;
@@ -583,7 +607,7 @@ function wireInput() {
 function syncModeUI() {
   els.digitalControls.hidden = mode !== "digital";
   els.stageControls.hidden = mode !== "digital";
-  els.analogControls.hidden = mode !== "analog";
+  els.analogControls.hidden = mode !== "analog" && mode !== "nightshot";
   els.filmControls.hidden = mode !== "film";
   els.infraredControls.hidden = mode !== "infrared";
   els.nightshotControls.hidden = mode !== "nightshot";
@@ -639,37 +663,37 @@ function syncEffectUI() {
   setSlider(els.brightness, els.brightnessval, outputBrightness);
   setSlider(els.contrast, els.contrastval, outputContrast);
 
-  const analog = pipeline.ctx.P.analogStrength.value;
+  const analog = activeAnalogP().analogStrength.value;
   setSlider(els.analog, els.analogval, analog);
 
-  const tracking = pipeline.ctx.P.analogTracking.value;
+  const tracking = activeAnalogP().analogTracking.value;
   setSlider(els.tracking, els.trackingval, tracking);
 
-  const trackingChoppiness = pipeline.ctx.P.analogTrackingChoppiness.value;
+  const trackingChoppiness = activeAnalogP().analogTrackingChoppiness.value;
   setSlider(els.trackingchoppiness, els.trackingchoppinessval, trackingChoppiness);
 
-  const chromaBleed = pipeline.ctx.P.analogChromaBleed.value;
+  const chromaBleed = activeAnalogP().analogChromaBleed.value;
   setSlider(els.chromableed, els.chromableedval, chromaBleed);
 
-  const ringing = pipeline.ctx.P.analogRinging.value;
+  const ringing = activeAnalogP().analogRinging.value;
   setSlider(els.ringing, els.ringingval, ringing);
 
-  const tapeNoise = pipeline.ctx.P.analogTapeNoise.value;
+  const tapeNoise = activeAnalogP().analogTapeNoise.value;
   setSlider(els.tapenoise, els.tapenoiseval, tapeNoise);
 
-  const bandMask = pipeline.ctx.P.analogBandMask.value;
+  const bandMask = activeAnalogP().analogBandMask.value;
   setSlider(els.bandmask, els.bandmaskval, bandMask);
 
-  const edgeWave = pipeline.ctx.P.analogEdgeWave.value;
+  const edgeWave = activeAnalogP().analogEdgeWave.value;
   setSlider(els.edgewave, els.edgewaveval, edgeWave);
 
-  const dropouts = pipeline.ctx.P.analogDropouts.value;
+  const dropouts = activeAnalogP().analogDropouts.value;
   setSlider(els.dropouts, els.dropoutsval, dropouts);
 
-  const scanlines = pipeline.ctx.P.analogScanlines.value;
+  const scanlines = activeAnalogP().analogScanlines.value;
   setSlider(els.scanlines, els.scanlinesval, scanlines);
 
-  const headSwitch = pipeline.ctx.P.analogHeadSwitch.value;
+  const headSwitch = activeAnalogP().analogHeadSwitch.value;
   setSlider(els.headswitch, els.headswitchval, headSwitch);
 
   const FP = filmPipeline.ctx.P;
@@ -705,7 +729,6 @@ function syncEffectUI() {
   setSlider(els.nightshotresponse, els.nightshotresponseval, NS.nirInput.value);
   setSlider(els.nightshotsmear, els.nightshotsmearval, nightshotPipeline.ctx.P.smear.value);
   setSlider(els.nightshotnoise, els.nightshotnoiseval, NS.noiseAmount.value);
-  setSlider(els.nightshotvhs, els.nightshotvhsval, nightshotPipeline.cam.ctx.P.analogStrength.value);
 
   syncFreezeUI();
 }
