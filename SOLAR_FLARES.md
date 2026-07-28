@@ -69,7 +69,7 @@ To feed the result into the digital PowerShot ISP:
 
 ```js
 const scenePass = pass(scene, camera);
-const optical = spectralFlarePass(scenePass, flare, {
+const optical = solarFlarePass(scenePass, flare, {
   camera,
   sun,
   depthTexture: scenePass.getTexture("depth"),
@@ -99,7 +99,7 @@ const sun = {
 For a directional light, PowerShot derives the source direction from
 `light.position - light.target.position`. `sourceRadiance` is scene-relative
 because Three.js applications do not share one absolute radiometric exposure
-scale. Set `light.userData.spectralFlareRadiance` when its lighting intensity
+scale. Set `light.userData.solarFlareRadiance` when its lighting intensity
 and desired camera-source radiance use different calibrations.
 
 On-screen visibility samples nine points over the finite solar disc against the
@@ -167,6 +167,6 @@ The prescription is a classic public Tronnier Heliar design. The surface table
 was digitized from OpenLensFlare's `heliar-tronnier.xml` sample
 (BSD-2-Clause, © István Csoba), which follows the same historical design used
 by Hullin et al. 2011. The atlas generator in
-`tools/generate-spectral-flare-atlas.mjs` recomputes the shipped asset from the
-human-readable prescription in `src/spectral-flare-profile.js`; no third-party
+`tools/generate-solar-flare-atlas.mjs` recomputes the shipped asset from the
+human-readable prescription in `src/solar-flare-profile.js`; no third-party
 binary data ships with PowerShot.

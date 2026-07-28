@@ -37,11 +37,11 @@ import {
   DIFFRACTION_WAVELENGTHS_NM,
   HELIAR_TRONNIER_100MM,
   makeSpectralRgbWeights,
-} from "./spectral-flare-profile.js";
+} from "./solar-flare-profile.js";
 import {
   createDiffractionPsfTexture,
   releaseDiffractionPsf,
-} from "./spectral-flare-psf.js";
+} from "./solar-flare-psf.js";
 
 const DEG2RAD = Math.PI / 180;
 const DEFAULT_SOLAR_DIAMETER_DEG = 0.533;
@@ -58,7 +58,7 @@ const VISIBILITY_SAMPLES = Object.freeze([
   [-0.372, -0.372],
 ]);
 
-export const SPECTRAL_FLARE_DEFAULTS = Object.freeze({
+export const SOLAR_FLARE_DEFAULTS = Object.freeze({
   enabled: true,
   strength: 1,
   ghostStrength: 1,
@@ -303,7 +303,7 @@ export function resolveSunSource(sun, target = {}) {
   const radiance = finiteNonNegative(
     sun?.sourceRadiance
       ?? sun?.radiance
-      ?? sun?.userData?.spectralFlareRadiance
+      ?? sun?.userData?.solarFlareRadiance
       ?? sun?.intensity,
     1,
   );
@@ -363,14 +363,14 @@ function makeSunDiskOffsets(count) {
   return result;
 }
 
-export class SpectralLensFlarePipeline {
+export class SolarFlarePipeline {
   constructor(renderer, options = {}) {
     if (!renderer?.isWebGPURenderer) {
-      throw new TypeError("SpectralLensFlarePipeline requires THREE.WebGPURenderer.");
+      throw new TypeError("SolarFlarePipeline requires THREE.WebGPURenderer.");
     }
     if (!options.profile?.textureA || !options.profile?.textureB) {
       throw new Error(
-        "SpectralLensFlarePipeline requires a loaded flare profile. "
+        "SolarFlarePipeline requires a loaded flare profile. "
         + "Call loadHeliarTronnierFlareProfile() first.",
       );
     }
@@ -380,7 +380,7 @@ export class SpectralLensFlarePipeline {
     this.ownsProfile = options.ownsProfile === true;
     this.lens = options.lens || HELIAR_TRONNIER_100MM;
     this.settings = {
-      ...SPECTRAL_FLARE_DEFAULTS,
+      ...SOLAR_FLARE_DEFAULTS,
       ...options,
     };
     delete this.settings.profile;
@@ -390,7 +390,7 @@ export class SpectralLensFlarePipeline {
       0,
       finite(
         this.settings.ghostRadianceScale,
-        SPECTRAL_FLARE_DEFAULTS.ghostRadianceScale,
+        SOLAR_FLARE_DEFAULTS.ghostRadianceScale,
       ),
     );
 
@@ -413,7 +413,7 @@ export class SpectralLensFlarePipeline {
       ghostStrength: uniform(this.settings.ghostStrength),
       ghostRadianceScale: uniform(Math.max(
         0,
-        finite(this.settings.ghostRadianceScale, SPECTRAL_FLARE_DEFAULTS.ghostRadianceScale),
+        finite(this.settings.ghostRadianceScale, SOLAR_FLARE_DEFAULTS.ghostRadianceScale),
       )),
       diffractionStrength: uniform(this.settings.diffractionStrength),
       glareStrength: uniform(this.settings.glareStrength),
@@ -1246,12 +1246,12 @@ export class SpectralLensFlarePipeline {
     const camera = options.camera || this.camera;
     if (!camera?.isPerspectiveCamera) {
       throw new Error(
-        "SpectralLensFlarePipeline.renderTexture() requires a PerspectiveCamera.",
+        "SolarFlarePipeline.renderTexture() requires a PerspectiveCamera.",
       );
     }
     const sun = options.sun || this.sun;
     if (!sun) {
-      throw new Error("SpectralLensFlarePipeline.renderTexture() requires a sun source.");
+      throw new Error("SolarFlarePipeline.renderTexture() requires a sun source.");
     }
 
     const fallback = rendererSize(this.renderer);

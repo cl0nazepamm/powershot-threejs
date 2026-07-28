@@ -124,7 +124,7 @@ export const HELIAR_TRONNIER_100MM = Object.freeze({
   ]),
 });
 
-export const DEFAULT_SPECTRAL_FLARE_ATLAS_URL = new URL(
+export const DEFAULT_SOLAR_FLARE_ATLAS_URL = new URL(
   "./assets/heliar-tronnier-100mm-v1.bin",
   import.meta.url,
 );
@@ -223,17 +223,17 @@ function makeHalfFloatAtlasTexture(source, width, height, name) {
   return texture;
 }
 
-export function parseSpectralFlareAtlas(arrayBuffer, { createTextures = true } = {}) {
+export function parseSolarFlareAtlas(arrayBuffer, { createTextures = true } = {}) {
   if (!(arrayBuffer instanceof ArrayBuffer)) {
-    throw new TypeError("parseSpectralFlareAtlas expects an ArrayBuffer.");
+    throw new TypeError("parseSolarFlareAtlas expects an ArrayBuffer.");
   }
   if (arrayBuffer.byteLength < HEADER_BYTES) {
-    throw new Error("Spectral flare atlas is shorter than its header.");
+    throw new Error("Solar flare atlas is shorter than its header.");
   }
 
   const bytes = new Uint8Array(arrayBuffer);
   if (readMagic(bytes) !== MAGIC) {
-    throw new Error("Invalid spectral flare atlas magic.");
+    throw new Error("Invalid solar flare atlas magic.");
   }
 
   const view = new DataView(arrayBuffer);
@@ -253,7 +253,7 @@ export function parseSpectralFlareAtlas(arrayBuffer, { createTextures = true } =
   const payloadBytes = view.getUint32(60, true);
 
   if (version !== 1 || headerBytes !== HEADER_BYTES) {
-    throw new Error(`Unsupported spectral flare atlas version ${version}.`);
+    throw new Error(`Unsupported solar flare atlas version ${version}.`);
   }
   if (
     pathCount === 0
@@ -262,7 +262,7 @@ export function parseSpectralFlareAtlas(arrayBuffer, { createTextures = true } =
     || gridSize < 2
     || recordCount !== pathCount * wavelengthCount * angleCount * gridSize * gridSize
   ) {
-    throw new Error("Spectral flare atlas dimensions are inconsistent.");
+    throw new Error("Solar flare atlas dimensions are inconsistent.");
   }
 
   let offset = headerBytes;
@@ -282,7 +282,7 @@ export function parseSpectralFlareAtlas(arrayBuffer, { createTextures = true } =
     payloadBytes !== expectedPayloadBytes
     || offset + channelByteLength * 2 !== arrayBuffer.byteLength
   ) {
-    throw new Error("Spectral flare atlas payload size is inconsistent.");
+    throw new Error("Solar flare atlas payload size is inconsistent.");
   }
 
   // Views, not copies: the texture path pads straight out of the fetch buffer,
@@ -344,7 +344,7 @@ export function parseSpectralFlareAtlas(arrayBuffer, { createTextures = true } =
 }
 
 export async function loadHeliarTronnierFlareProfile({
-  url = DEFAULT_SPECTRAL_FLARE_ATLAS_URL,
+  url = DEFAULT_SOLAR_FLARE_ATLAS_URL,
   fetch: fetchImpl = globalThis.fetch,
   createTextures = true,
 } = {}) {
@@ -353,12 +353,12 @@ export async function loadHeliarTronnierFlareProfile({
   }
   const response = await fetchImpl(url);
   if (!response.ok) {
-    throw new Error(`Unable to load spectral flare atlas (${response.status}).`);
+    throw new Error(`Unable to load solar flare atlas (${response.status}).`);
   }
-  return parseSpectralFlareAtlas(await response.arrayBuffer(), { createTextures });
+  return parseSolarFlareAtlas(await response.arrayBuffer(), { createTextures });
 }
 
-export function disposeSpectralFlareProfile(profile) {
+export function disposeSolarFlareProfile(profile) {
   profile?.textureA?.dispose?.();
   profile?.textureB?.dispose?.();
 }
@@ -366,10 +366,10 @@ export function disposeSpectralFlareProfile(profile) {
 // Test/debug helper. Runtime rendering intentionally keeps the atlas packed as
 // half-float textures; decoding is useful for audit tools and deterministic
 // tests, so the raw arrays only exist when parsed with createTextures: false.
-export function decodeSpectralFlareAtlas(profile) {
+export function decodeSolarFlareAtlas(profile) {
   if (!profile?.atlasAHalf || !profile?.atlasBHalf) {
     throw new Error(
-      "decodeSpectralFlareAtlas() needs a profile parsed with createTextures: false.",
+      "decodeSolarFlareAtlas() needs a profile parsed with createTextures: false.",
     );
   }
   return {

@@ -7,22 +7,22 @@ import * as THREE from "three/webgpu";
 import {
   GHOST_WAVELENGTHS_NM,
   HELIAR_TRONNIER_100MM,
-  decodeSpectralFlareAtlas,
+  decodeSolarFlareAtlas,
   makeSpectralRgbWeights,
-  parseSpectralFlareAtlas,
-} from "../src/spectral-flare-profile.js";
+  parseSolarFlareAtlas,
+} from "../src/solar-flare-profile.js";
 import {
   createDiffractionPsfTexture,
   generateDiffractionPsf,
   releaseDiffractionPsf,
-} from "../src/spectral-flare-psf.js";
+} from "../src/solar-flare-psf.js";
 import {
-  SPECTRAL_FLARE_DEFAULTS,
+  SOLAR_FLARE_DEFAULTS,
   apertureSpikeHarmonic,
   diffractionPeakScale,
   projectSunDirection,
   sensorGateToNdc,
-} from "../src/spectral-flare.js";
+} from "../src/solar-flare.js";
 import {
   cauchyIndex,
   computeFluxScale,
@@ -31,7 +31,7 @@ import {
   prepareLens,
   thinFilmReflectance,
   traceGhostRay,
-} from "../tools/spectral-flare-optics.mjs";
+} from "../tools/solar-flare-optics.mjs";
 
 const atlasUrl = new URL(
   "../src/assets/heliar-tronnier-100mm-v1.bin",
@@ -40,7 +40,7 @@ const atlasUrl = new URL(
 
 async function loadAtlas() {
   const file = await readFile(atlasUrl);
-  return parseSpectralFlareAtlas(
+  return parseSolarFlareAtlas(
     file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength),
     { createTextures: false },
   );
@@ -75,7 +75,7 @@ test("shipped Heliar atlas has the expected dimensions and ranked paths", async 
 
 test("atlas transport contains finite, unclamped off-screen rays and valid optical energy", async () => {
   const profile = await loadAtlas();
-  const { atlasA, atlasB } = decodeSpectralFlareAtlas(profile);
+  const { atlasA, atlasB } = decodeSolarFlareAtlas(profile);
   let validCount = 0;
   let offscreenCount = 0;
   let positiveEnergyCount = 0;
@@ -104,7 +104,7 @@ test("atlas transport contains finite, unclamped off-screen rays and valid optic
 
 test("atlas raw channel arrays are retained only on the debug parse path", async () => {
   const file = await readFile(atlasUrl);
-  const gpuProfile = parseSpectralFlareAtlas(
+  const gpuProfile = parseSolarFlareAtlas(
     file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength),
     { createTextures: true },
   );
@@ -112,11 +112,11 @@ test("atlas raw channel arrays are retained only on the debug parse path", async
   assert.equal(gpuProfile.atlasBHalf, undefined);
   assert.equal(gpuProfile.textureA.image.width, gpuProfile.atlasWidth);
   assert.equal(gpuProfile.textureA.image.height, gpuProfile.atlasHeight);
-  assert.throws(() => decodeSpectralFlareAtlas(gpuProfile), /createTextures/);
+  assert.throws(() => decodeSolarFlareAtlas(gpuProfile), /createTextures/);
 
   const debugProfile = await loadAtlas();
   assert.ok(debugProfile.atlasAHalf instanceof Uint16Array);
-  const { atlasA } = decodeSpectralFlareAtlas(debugProfile);
+  const { atlasA } = decodeSolarFlareAtlas(debugProfile);
   assert.equal(atlasA.length, debugProfile.recordCount * 4);
 });
 
@@ -360,9 +360,9 @@ test("sensor-space transport registers to the active perspective projection", ()
 });
 
 test("defaults include an enabled source-glare component and a fine PSF grid", () => {
-  assert.ok(SPECTRAL_FLARE_DEFAULTS.glareStrength > 0);
-  assert.equal(SPECTRAL_FLARE_DEFAULTS.psfSize, 1024);
-  assert.ok(SPECTRAL_FLARE_DEFAULTS.psfStorageScale > 1);
+  assert.ok(SOLAR_FLARE_DEFAULTS.glareStrength > 0);
+  assert.equal(SOLAR_FLARE_DEFAULTS.psfSize, 1024);
+  assert.ok(SOLAR_FLARE_DEFAULTS.psfStorageScale > 1);
 });
 
 test("blade streak count follows iris parity: 2N spikes when odd, N when even", () => {

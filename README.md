@@ -145,14 +145,14 @@ Run it before PowerShot, film, exposure, tone mapping, and output conversion:
 import * as THREE from "three/webgpu";
 import { pass } from "three/tsl";
 import {
-  SpectralLensFlarePipeline,
+  SolarFlarePipeline,
   loadHeliarTronnierFlareProfile,
-  spectralFlarePass,
+  solarFlarePass,
 } from "powershot-threejs";
 
 const scenePass = pass(scene, camera);
 const profile = await loadHeliarTronnierFlareProfile();
-const flare = new SpectralLensFlarePipeline(renderer, {
+const flare = new SolarFlarePipeline(renderer, {
   profile,
   camera,
   sun, // THREE.DirectionalLight
@@ -161,7 +161,7 @@ flare.setSize(width, height);
 flare.setAperture({ fNumber: 8, blades: 7 });
 
 const renderPipeline = new THREE.RenderPipeline(renderer);
-renderPipeline.outputNode = spectralFlarePass(scenePass, flare, {
+renderPipeline.outputNode = solarFlarePass(scenePass, flare, {
   camera,
   sun,
   depthTexture: scenePass.getTexture("depth"),

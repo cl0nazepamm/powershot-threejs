@@ -47,36 +47,36 @@ export {
   filmPass,
   infraredPass,
   powerShotPass,
-  spectralFlarePass,
-  SpectralFlarePassNode,
+  solarFlarePass,
+  SolarFlarePassNode,
 } from "./render-pipeline.js";
 
 export {
-  SPECTRAL_FLARE_DEFAULTS,
-  SpectralLensFlarePipeline,
+  SOLAR_FLARE_DEFAULTS,
+  SolarFlarePipeline,
   apertureSpikeHarmonic,
   diffractionPeakScale,
   projectSunDirection,
   resolveSunSource,
   sensorGateToNdc,
-} from "./spectral-flare.js";
+} from "./solar-flare.js";
 
 export {
-  DEFAULT_SPECTRAL_FLARE_ATLAS_URL,
+  DEFAULT_SOLAR_FLARE_ATLAS_URL,
   DIFFRACTION_WAVELENGTHS_NM,
   GHOST_WAVELENGTHS_NM,
   HELIAR_TRONNIER_100MM,
   cie1931XyzApprox,
-  decodeSpectralFlareAtlas,
-  disposeSpectralFlareProfile,
+  decodeSolarFlareAtlas,
+  disposeSolarFlareProfile,
   loadHeliarTronnierFlareProfile,
   makeSpectralRgbWeights,
-  parseSpectralFlareAtlas,
+  parseSolarFlareAtlas,
   xyzToLinearSrgb,
-} from "./spectral-flare-profile.js";
+} from "./solar-flare-profile.js";
 
 export {
   createDiffractionPsfTexture,
   generateDiffractionPsf,
   releaseDiffractionPsf,
-} from "./spectral-flare-psf.js";
+} from "./solar-flare-psf.js";

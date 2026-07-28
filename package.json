@@ -21,8 +21,8 @@
     "./infrared": "./src/infrared.js",
     "./nightshot": "./src/nightshot.js",
     "./render-pipeline": "./src/render-pipeline.js",
-    "./spectral-flare": "./src/spectral-flare.js",
-    "./spectral-flare-profile": "./src/spectral-flare-profile.js"
+    "./solar-flare": "./src/solar-flare.js",
+    "./solar-flare-profile": "./src/solar-flare-profile.js"
   },
   "files": [
     "LICENSE",
@@ -36,12 +36,12 @@
     "src/infrared.js",
     "src/nightshot.js",
     "src/render-pipeline.js",
-    "src/spectral-flare.js",
-    "src/spectral-flare-profile.js",
-    "src/spectral-flare-psf.js",
+    "src/solar-flare.js",
+    "src/solar-flare-profile.js",
+    "src/solar-flare-psf.js",
     "src/assets/heliar-tronnier-100mm-v1.bin",
-    "tools/spectral-flare-optics.mjs",
-    "tools/generate-spectral-flare-atlas.mjs"
+    "tools/solar-flare-optics.mjs",
+    "tools/generate-solar-flare-atlas.mjs"
   ],
   "keywords": [
     "threejs",
@@ -60,9 +60,9 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "generate:flare-atlas": "node tools/generate-spectral-flare-atlas.mjs",
-    "generate:flare-atlas:max": "node tools/generate-spectral-flare-atlas.mjs --max",
-    "check": "node --check src/index.js && node --check src/main.js && node --check src/pipeline.js && node --check src/presets.js && node --check src/film.js && node --check src/infrared.js && node --check src/nightshot.js && node --check src/render-pipeline.js && node --check src/spectral-flare.js && node --check src/spectral-flare-profile.js && node --check src/spectral-flare-psf.js && node --check src/flare-demo.js && node --check tools/spectral-flare-optics.mjs && node --check tools/generate-spectral-flare-atlas.mjs && node --check src/nv-demo.js && node --check src/nir_band.js",
+    "generate:flare-atlas": "node tools/generate-solar-flare-atlas.mjs",
+    "generate:flare-atlas:max": "node tools/generate-solar-flare-atlas.mjs --max",
+    "check": "node --check src/index.js && node --check src/main.js && node --check src/pipeline.js && node --check src/presets.js && node --check src/film.js && node --check src/infrared.js && node --check src/nightshot.js && node --check src/render-pipeline.js && node --check src/solar-flare.js && node --check src/solar-flare-profile.js && node --check src/solar-flare-psf.js && node --check src/flare-demo.js && node --check tools/solar-flare-optics.mjs && node --check tools/generate-solar-flare-atlas.mjs && node --check src/nv-demo.js && node --check src/nir_band.js",
     "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {

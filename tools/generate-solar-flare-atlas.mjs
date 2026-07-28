@@ -5,13 +5,13 @@ import { fileURLToPath } from "node:url";
 import {
   GHOST_WAVELENGTHS_NM,
   HELIAR_TRONNIER_100MM,
-} from "../src/spectral-flare-profile.js";
+} from "../src/solar-flare-profile.js";
 import {
   enumerateTwoReflectionPaths,
   integratePupilThroughput,
   prepareLens,
   traceGhostGrid,
-} from "./spectral-flare-optics.mjs";
+} from "./solar-flare-optics.mjs";
 
 // Shipped defaults trade faint ghost-tail fidelity for a ~4× smaller atlas.
 // Pass --max for the calibration-grade build (24 paths × 31 angles × 17² grid,

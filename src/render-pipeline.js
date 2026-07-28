@@ -10,7 +10,7 @@ import {
 import { FilmPipeline } from "./film.js";
 import { InfraredPipeline } from "./infrared.js";
 import { Pipeline } from "./pipeline.js";
-import { SpectralLensFlarePipeline } from "./spectral-flare.js";
+import { SolarFlarePipeline } from "./solar-flare.js";
 
 const DEFAULT_TARGET_OPTIONS = {
   type: THREE.HalfFloatType,
@@ -302,10 +302,10 @@ export class InfraredPassNode extends EffectPassNode {
  * directional sun and scene depth required by the optical model. When the
  * input is a direct `pass(scene, camera)`, its depth texture is inferred.
  */
-export class SpectralFlarePassNode extends EffectPassNode {
+export class SolarFlarePassNode extends EffectPassNode {
   constructor(inputNode, flare = null, options = {}) {
     super(inputNode, flare, {
-      createEffect: (renderer) => new SpectralLensFlarePipeline(renderer, {
+      createEffect: (renderer) => new SolarFlarePipeline(renderer, {
         profile: options.profile,
         ...(options.flareOptions || {}),
       }),
@@ -375,7 +375,7 @@ export function infraredPass(inputNode, pipelineOrOptions = null, options = {}) 
   return new InfraredPassNode(inputNode, normalized.effect, normalized.options);
 }
 
-export function spectralFlarePass(inputNode, flareOrOptions = null, options = {}) {
+export function solarFlarePass(inputNode, flareOrOptions = null, options = {}) {
   const normalized = normalizeEffectArgs(flareOrOptions, options);
-  return new SpectralFlarePassNode(inputNode, normalized.effect, normalized.options);
+  return new SolarFlarePassNode(inputNode, normalized.effect, normalized.options);
 }

@@ -8,9 +8,9 @@ import {
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import {
-  SpectralLensFlarePipeline,
+  SolarFlarePipeline,
   loadHeliarTronnierFlareProfile,
-  spectralFlarePass,
+  solarFlarePass,
 } from "./index.js";
 
 const SOLAR_DIAMETER_DEG = 0.533;
@@ -46,7 +46,7 @@ const debug = {
   sunNdc: [0, 0],
   controls: { ...parameters },
 };
-window.__spectralFlareDebug = debug;
+window.__solarFlareDebug = debug;
 
 let renderer;
 let scene;
@@ -251,7 +251,7 @@ function buildScene() {
   sun.shadow.camera.bottom = -42;
   sun.shadow.bias = -0.00035;
   sun.shadow.normalBias = 0.025;
-  sun.userData.spectralFlareRadiance = 9;
+  sun.userData.solarFlareRadiance = 9;
   sun.userData.angularDiameterDeg = SOLAR_DIAMETER_DEG;
   sun.target.position.copy(lightTarget);
   scene.add(sun, sun.target);
@@ -400,7 +400,7 @@ async function init() {
   resize();
 
   const profile = await loadHeliarTronnierFlareProfile();
-  flare = new SpectralLensFlarePipeline(renderer, {
+  flare = new SolarFlarePipeline(renderer, {
     profile,
     camera,
     sun,
@@ -425,7 +425,7 @@ async function init() {
     sourcePass.rgb.add(sunPass.rgb.mul(skyMask)),
     sourcePass.a,
   );
-  const flareNode = spectralFlarePass(sceneWithSun, flare, {
+  const flareNode = solarFlarePass(sceneWithSun, flare, {
     camera,
     sun,
     depthTexture: () => (USE_SCENE_DEPTH ? depthTexture : null),
