@@ -7,6 +7,8 @@ import {
   applyInfraredProfile,
   NightshotPipeline, NIGHTSHOT_PRESETS, applyNightshotPreset,
 } from "./index.js";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { createDaylightScene, createNightScene } from "./demo-scenes.js";
 
 const MAX_WORK = 1600; // cap working resolution for snappy realtime
 const ANALOG_WORK = [720, 540];
@@ -15,6 +17,7 @@ const DEFAULT_IMAGE = `${import.meta.env.BASE_URL}vibe%20coding.jpg`;
 const els = {
   canvas: document.getElementById("view"),
   mode: document.getElementById("mode"),
+  sourcesel: document.getElementById("sourcesel"),
   resolution: document.getElementById("resolution"),
   resolutionval: document.getElementById("resolutionval"),
   preset: document.getElementById("preset"),
@@ -151,6 +154,10 @@ const els = {
 };
 
 let renderer, pipeline, filmPipeline, infraredPipeline, nightshotPipeline, source = null;
+let fileSource = null;        // last loaded image/video texture
+let activeSourceKind = "day"; // "day" | "night" | "file"
+const sceneRigs = {};         // kind -> { scene, camera, controls, rt, texture, ... }
+const SCENE_RT_SIZE = [1600, 1200]; // 4:3 virtual sensor plate
 let currentVideo = null;
 let videoFrameDirty = false;
 // Firefox's WebGPU can't copy an HTMLVideoElement directly into a texture; when
@@ -193,6 +200,10 @@ async function init() {
   renderer.toneMapping = THREE.NoToneMapping;
   // present our gamma-encoded 0..1 values verbatim (no extra sRGB encode)
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+  // for the 3D scene sources; the effect quad passes carry no lights, so the
+  // file paths render exactly as before
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   await renderer.init();
 
   pipeline = new Pipeline(renderer);
@@ -212,6 +223,8 @@ async function init() {
   applyFilmPreset(filmPipeline.ctx, FILM_PRESETS[filmPresetKey]);
   applyInfraredProfile(infraredPipeline, INFRARED_PRESETS[infraredPresetKey]);
   applyNightshotPreset(nightshotPipeline, NIGHTSHOT_PRESETS[nightshotPresetKey]);
+  // land on the live 3D scene; the loaded photo stays one Source-select away
+  setActiveSource(mode === "infrared" || mode === "nightshot" ? "night" : "day");
   syncEffectUI();
 
   renderer.setAnimationLoop(tick);
@@ -302,10 +315,17 @@ function wireInput() {
   els.mode.addEventListener("change", () => {
     mode = els.mode.value;
     if (mode === "analog" || mode === "digital") pipeline.setMode(mode);
+    // night-vision modes pair with the night yard, the others with daylight —
+    // only while a 3D scene is the source; file sources are never hijacked
+    if (activeSourceKind !== "file") {
+      const wanted = mode === "infrared" || mode === "nightshot" ? "night" : "day";
+      if (wanted !== activeSourceKind) setActiveSource(wanted);
+    }
     syncModeUI();
     syncFreezeUI();
     resizeForSource();
   });
+  els.sourcesel.addEventListener("change", () => setActiveSource(els.sourcesel.value));
   els.resolution.addEventListener("input", () => {
     resolutionScale = Math.min(1, Math.max(0.1, els.resolution.value / 100));
     els.resolutionval.textContent = `${resolutionScale.toFixed(2)}x`;
@@ -697,6 +717,86 @@ function syncEffectUI() {
   syncFreezeUI();
 }
 
+// ── 3D scene sources ────────────────────────────────────────────────
+// A shared demo scene (src/demo-scenes.js) renders into a half-float plate
+// every frame and feeds the pipelines as scene-linear input — the ISP / film
+// print / tube becomes the actual imager. File sources keep the exact sRGB
+// path they always had.
+
+function makeSceneRig(kind) {
+  const [w, h] = SCENE_RT_SIZE;
+  const rig = kind === "day" ? createDaylightScene() : createNightScene();
+
+  const camera = new THREE.PerspectiveCamera(
+    kind === "day" ? 49 : 58, w / h, 0.1, kind === "day" ? 1400 : 200,
+  );
+  const controls = new OrbitControls(camera, els.canvas);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.06;
+  controls.autoRotate = true;
+  controls.autoRotateSpeed = 0.55;
+  if (kind === "day") {
+    camera.position.set(14, 6, 24);
+    controls.target.set(0, 3.2, -4);
+    controls.minDistance = 8;
+    controls.maxDistance = 62;
+    controls.maxPolarAngle = Math.PI * 0.49;
+  } else {
+    camera.position.set(0.5, 1.8, 6.5);
+    controls.target.set(0, 1.1, -10);
+    controls.minDistance = 3;
+    controls.maxDistance = 30;
+    controls.maxPolarAngle = Math.PI * 0.52;
+  }
+  controls.enabled = false;
+  controls.update();
+
+  const rt = new THREE.RenderTarget(w, h, {
+    type: THREE.HalfFloatType,
+    colorSpace: THREE.NoColorSpace,
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    depthBuffer: true,
+    samples: 4,
+  });
+  rt.texture.userData.w = w;
+  rt.texture.userData.h = h;
+  rt.texture.userData.label = kind === "day" ? "scene-daylight" : "scene-night";
+  rt.texture.userData.isSceneRT = true;
+
+  return { ...rig, kind, camera, controls, rt, texture: rt.texture };
+}
+
+function activateTexture(tex, kind) {
+  activeSourceKind = kind;
+  if (els.sourcesel.value !== kind) els.sourcesel.value = kind;
+  source = tex;
+  const encoding = kind === "file" ? "srgb" : "linear";
+  pipeline.setInputEncoding(encoding);
+  filmPipeline.setInputEncoding(encoding);
+  infraredPipeline.setInputEncoding(encoding);
+  nightshotPipeline.setInputEncoding(encoding);
+  pipeline.setSource(source);
+  filmPipeline.setSource(source);
+  infraredPipeline.setSource(source);
+  nightshotPipeline.setSource(source);
+  for (const [k, rig] of Object.entries(sceneRigs)) rig.controls.enabled = k === kind;
+  if (kind !== "file" && currentVideo && !currentVideo.paused) currentVideo.pause();
+  els.videoControls.hidden = !(kind === "file" && currentVideo);
+  resizeForSource();
+}
+
+function setActiveSource(kind) {
+  if (kind === "file") {
+    if (fileSource) activateTexture(fileSource, "file");
+    else loadImage(DEFAULT_IMAGE);
+    return;
+  }
+  const rig = sceneRigs[kind] ?? (sceneRigs[kind] = makeSceneRig(kind));
+  activateTexture(rig.texture, kind);
+  setStatus(`3D scene · ${kind === "day" ? "daylight" : "night"}\ndrag to orbit · scroll to zoom`);
+}
+
 async function loadFile(file) {
   if (file.type.startsWith("video/")) return loadVideo(file);
   const bitmap = await createImageBitmap(file);
@@ -751,7 +851,7 @@ async function videoUploadUnsupported(video) {
 }
 
 async function setVideoSource(video, label) {
-  if (source) source.dispose();
+  if (fileSource) fileSource.dispose();
   currentVideo = video;
   // Plain Texture (not VideoTexture) so the frame goes through the exact same
   // NoColorSpace upload path images use — keeps the filtered look identical.
@@ -778,14 +878,9 @@ async function setVideoSource(video, label) {
   tex.userData.h = video.videoHeight;
   tex.userData.label = label;
   tex.userData.isVideo = true;
-  source = tex;
+  fileSource = tex;
   videoFrameDirty = true;       // push the first (paused) frame through once
-  pipeline.setSource(source);
-  filmPipeline.setSource(source);
-  infraredPipeline.setSource(source);
-  nightshotPipeline.setSource(source);
-  resizeForSource();
-  els.videoControls.hidden = false;
+  activateTexture(fileSource, "file");
   els.volume.value = Math.round(userVolume * 100);
   els.volval.textContent = String(Math.round(userVolume * 100));
   syncTransportUI();
@@ -837,22 +932,19 @@ async function loadImage(url) {
 
 function setSource(bitmap, label) {
   stopVideo();
-  if (source) source.dispose();
-  source = new THREE.Texture(bitmap);
-  source.colorSpace = THREE.NoColorSpace;
-  source.flipY = false;
-  source.minFilter = THREE.LinearMipmapLinearFilter;
-  source.magFilter = THREE.LinearFilter;
-  source.generateMipmaps = true;
-  source.needsUpdate = true;
-  source.userData.w = bitmap.width;
-  source.userData.h = bitmap.height;
-  source.userData.label = label;
-  pipeline.setSource(source);
-  filmPipeline.setSource(source);
-  infraredPipeline.setSource(source);
-  nightshotPipeline.setSource(source);
-  resizeForSource();
+  if (fileSource) fileSource.dispose();
+  const tex = new THREE.Texture(bitmap);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.flipY = false;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+  tex.needsUpdate = true;
+  tex.userData.w = bitmap.width;
+  tex.userData.h = bitmap.height;
+  tex.userData.label = label;
+  fileSource = tex;
+  activateTexture(fileSource, "file");
 }
 
 function resizeForSource() {
@@ -962,6 +1054,16 @@ async function tick() {
   const tickNow = performance.now();
   const dt = lastTickAt > 0 ? (tickNow - lastTickAt) / 1000 : 1 / 60;
   lastTickAt = tickNow;
+
+  // render the active 3D scene into its plate target
+  const sceneRig = activeSourceKind === "file" ? null : sceneRigs[activeSourceKind];
+  if (sceneRig) {
+    sceneRig.controls.update();
+    sceneRig.updateSunDisk?.(sceneRig.camera);
+    renderer.setRenderTarget(sceneRig.rt);
+    renderer.render(sceneRig.scene, sceneRig.camera);
+    renderer.setRenderTarget(null);
+  }
 
   // re-upload the current video frame while it plays (or once after a seek)
   if (source.userData.isVideo && currentVideo && currentVideo.readyState >= 2) {

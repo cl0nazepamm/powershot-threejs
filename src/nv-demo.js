@@ -24,6 +24,7 @@ import * as THREE from "three/webgpu";
 import { dot, screenUV, texture, vec3, vec4 } from "three/tsl";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createSpectralTracer } from "speedball-gi/spectral-tracer";
+import { createNightScene } from "./demo-scenes.js";
 import { createNirBand } from "./nir_band.js";
 import {
   InfraredPipeline, INFRARED_PRESETS, applyInfraredProfile,
@@ -62,123 +63,10 @@ const USE_TUBE = params.get("tube") !== "0";
 const USE_TRACER = params.get("trace") !== "0";
 const START_MODE = params.get("mode") === "visible" ? "visible" : "nv";
 
-function std(color, opts = {}) {
-  return new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0.0, ...opts });
-}
-
 function buildScene() {
-  scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x000000); // moonless night, no env
-
-  // ── ground: dirt yard + asphalt path ─────────────────────────────
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), std(0x1a1610));
-  ground.material.name = "ground_dirt";
-  ground.rotation.x = -Math.PI / 2;
-  scene.add(ground);
-
-  const path = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.05, 40), std(0x0d0d0e, { roughness: 0.85 }));
-  path.material.name = "asphalt_path"; // classifier → NIR 0.06 (near-black)
-  path.position.set(0, 0.026, -8);
-  scene.add(path);
-
-  // ── THE METAMER PAIR: identical sRGB green, different NIR truth ──
-  const hedgeGreen = 0x0c2008; // same color object for both
-  for (let i = 0; i < 5; i += 1) {
-    const hedge = new THREE.Mesh(
-      new THREE.BoxGeometry(2.2, 1.5, 1.2),
-      std(hedgeGreen, { roughness: 0.95 }),
-    );
-    hedge.material.name = "hedge_foliage"; // classifier → NIR 0.55 (red edge)
-    hedge.position.set(-6 + i * 3.0, 0.75, -14);
-    scene.add(hedge);
-  }
-  for (let i = 0; i < 5; i += 1) {
-    const plank = new THREE.Mesh(
-      new THREE.BoxGeometry(2.2, 1.5, 0.12),
-      std(hedgeGreen, { roughness: 0.7 }),
-    );
-    plank.material.name = "fence_green_paint";
-    plank.material.userData.nirAlbedo = 0.07; // authored: green PAINT, no red edge
-    plank.position.set(-6 + i * 3.0, 0.75, -17.5);
-    scene.add(plank);
-  }
-
-  // ── trees ─────────────────────────────────────────────────────────
-  for (const [x, z] of [[-11, -7], [11, -11]]) {
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.35, 3.4, 8), std(0x241a10));
-    trunk.material.name = "tree_trunk";
-    trunk.position.set(x, 1.7, z);
-    scene.add(trunk);
-    for (const [dx, dy, dz, r] of [[0, 4.2, 0, 1.9], [-1.1, 3.4, 0.4, 1.2], [1.0, 3.6, -0.5, 1.3]]) {
-      const crown = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), std(0x11260a, { roughness: 0.95 }));
-      crown.material.name = "tree_foliage"; // classifier → NIR 0.55
-      crown.position.set(x + dx, dy, z + dz);
-      scene.add(crown);
-    }
-  }
-
-  // ── pond: water absorbs NIR → black through the tube ─────────────
-  const pond = new THREE.Mesh(new THREE.CircleGeometry(3.4, 28), std(0x04101a, { roughness: 0.12 }));
-  pond.material.name = "water_pond"; // classifier → NIR 0.04
-  pond.rotation.x = -Math.PI / 2;
-  pond.position.set(7.5, 0.03, -4);
-  scene.add(pond);
-
-  // ── a person by the hedge (skin lifts in NIR) ─────────────────────
-  const person = new THREE.Mesh(new THREE.CapsuleGeometry(0.32, 1.1, 6, 12), std(0xb0785a, { roughness: 0.6 }));
-  person.material.name = "person"; // skin-tone heuristic → NIR 0.62
-  person.position.set(-3.4, 0.9, -12.2);
-  scene.add(person);
-
-  // ── emitters ──────────────────────────────────────────────────────
-  // incandescent porch bulb (Planck tail → NV monster)
-  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 3.0, 8), std(0x14100c));
-  post.position.set(-9, 1.5, -3);
-  scene.add(post);
-  const bulb = new THREE.Mesh(
-    new THREE.SphereGeometry(0.16, 12, 8),
-    new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xffc98c, emissiveIntensity: 6 }),
-  );
-  bulb.position.set(-9, 3.1, -3);
-  scene.add(bulb);
-  const porch = new THREE.PointLight(0xffc98c, 22, 0, 2);
-  porch.position.copy(bulb.position);
-  porch.userData.emitterClass = "incandescent";
-  porch.userData.colorTemp = 2856;
-  scene.add(porch);
-
-  // LED floodlight of similar visible punch (no NIR tail → dark in NV)
-  const ledHead = new THREE.Mesh(
-    new THREE.BoxGeometry(0.5, 0.3, 0.3),
-    new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xdfe9ff, emissiveIntensity: 5 }),
-  );
-  ledHead.position.set(9, 3.4, -9);
-  scene.add(ledHead);
-  const led = new THREE.SpotLight(0xdfe9ff, 26, 0, 0.7, 0.5, 2);
-  led.position.copy(ledHead.position);
-  led.target.position.set(6, 0, -5);
-  led.userData.emitterClass = "led";
-  scene.add(led);
-  scene.add(led.target);
-
-  // sodium street lamp far down the path (589 nm line → dim in NV)
-  const sodium = new THREE.PointLight(0xff9a33, 34, 0, 2);
-  sodium.position.set(0, 5.2, -24);
-  sodium.userData.emitterClass = "sodium";
-  scene.add(sodium);
-  const sodiumHead = new THREE.Mesh(
-    new THREE.SphereGeometry(0.2, 10, 8),
-    new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xff9a33, emissiveIntensity: 8 }),
-  );
-  sodiumHead.position.copy(sodium.position);
-  scene.add(sodiumHead);
-
-  // faint moon so the unlit yard isn't a void
-  const moon = new THREE.DirectionalLight(0x8fa4c8, 0.06);
-  moon.position.set(14, 22, 10);
-  moon.target.position.set(0, 0, -8);
-  scene.add(moon);
-  scene.add(moon.target);
+  // Shared night yard (src/demo-scenes.js) — material names and userData are
+  // the classifier's ground truth, so the scene must come from one source.
+  ({ scene } = createNightScene());
 
   // ── camera + THE IR ILLUMINATOR bolted to it ──────────────────────
   camera = new THREE.PerspectiveCamera(58, 1, 0.1, 200);
@@ -203,15 +91,8 @@ function buildScene() {
   irLight.shadow.camera.far = 60;
   irLight.shadow.bias = -0.0004;
   irLight.shadow.normalBias = 0.02;
-  scene.traverse((o) => {
-    if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
-    if (o.isSpotLight && o !== irLight) {
-      o.castShadow = true;
-      o.shadow.mapSize.set(512, 512);
-      o.shadow.bias = -0.0004;
-      o.shadow.normalBias = 0.02;
-    }
-  });
+  // mesh + scene-light shadow flags are set inside createNightScene(); the
+  // irLight above is added afterwards, so it keeps its own 1024 map config.
 }
 
 // ── realtime NIR band raster ─────────────────────────────────────────

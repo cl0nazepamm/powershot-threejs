@@ -134,7 +134,8 @@ renderPipeline.outputNode = effectPass(scenePass, {
 
 - `index.html` - UI shell and import map for Three.js WebGPU.
 - `src/index.js` - public package exports.
-- `src/main.js` - demo bootstrap, controls, image loading, and render loop.
+- `src/main.js` - demo bootstrap, controls, source management (3D scenes, image, video), and render loop.
+- `src/demo-scenes.js` - shared demo scenery: the daylight farm (also used by the flare demo) and the night yard (also used by the NV demo), rendered to a half-float plate and fed to the pipelines as scene-linear input.
 - `src/pipeline.js` - reusable realtime ISP stages and WebGPU render passes.
 - `src/film.js` - reusable motion-picture film emulation pipeline and stock presets.
 - `src/infrared.js` - reusable pseudo-NIR night-vision pipeline and presets.
