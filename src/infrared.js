@@ -332,14 +332,21 @@ function stAnalysisBlur(tex, ctx, dx, dy, disc) {
   if (!disc) return vec4(gauss, 1.0);
 
   const rot = dy === 0 ? 0.0 : GOLDEN_ANGLE * 0.5; // decorrelate the two passes
+  // Rotate the whole rosette per texel: with a fixed orientation the sparse
+  // taps print as a flower of discrete blobs around point sources (the disc
+  // undersamples at quarter res once glowRadius stretches it). Jittered, the
+  // residue is fine noise that the phosphor grain already masks. Static hash
+  // (no frame term) so frozen frames stay frozen.
+  const cell = floor(screenUV.div(ctx.analysisTexel));
+  const jitter = hash13(vec3(cell.x, cell.y, 19.19 + rot)).mul(TAU);
   let glow = vec2(0.0);
-  const taps = 13;
+  const taps = 27;
   for (let i = 0; i < taps; i += 1) {
     const r = Math.sqrt((i + 0.5) / taps) * 6.0; // match the gaussian footprint (+/-6 taps)
-    const ang = i * GOLDEN_ANGLE + rot;
+    const ang = jitter.add(i * GOLDEN_ANGLE + rot);
     const off = ctx.analysisTexel
-      .mul(vec2(Math.cos(ang) * r, Math.sin(ang) * r))
-      .mul(ctx.P.glowRadius);
+      .mul(vec2(cos(ang), sin(ang)))
+      .mul(ctx.P.glowRadius.mul(r));
     glow = glow.add(texture(tex, screenUV.add(off)).gb.mul(1 / taps));
   }
   return vec4(gauss.r, glow.x, glow.y, 1.0);
