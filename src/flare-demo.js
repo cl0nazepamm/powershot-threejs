@@ -30,7 +30,7 @@ const parameters = {
   sunElevation: 14.5,
   fNumber: 8,
   ghost: 1,
-  diffraction: 5,
+  diffraction: 1,
   glare: 1,
   veil: 0.06,
   visibility: 1,

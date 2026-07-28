@@ -223,6 +223,52 @@ test("diffraction FFT conserves energy and produces a blade-dependent star", () 
   assert.notEqual(horizontal, diagonal);
 });
 
+test("diffraction pupil imperfections are deterministic and break exact mirror symmetry", () => {
+  const imperfect = generateDiffractionPsf({ size: 256 });
+  const repeated = generateDiffractionPsf({ size: 256 });
+  const clean = generateDiffractionPsf({
+    size: 256,
+    wavefrontError: 0,
+    edgeVariation: 0,
+    scatterStrength: 0,
+  });
+  assert.deepEqual(imperfect.data, repeated.data);
+
+  const asymmetry = (psf) => {
+    const center = psf.size / 2;
+    let difference = 0;
+    let energy = 0;
+    for (let y = 0; y < psf.size; y += 1) {
+      for (let x = 0; x < psf.size; x += 1) {
+        const mirrorX = (2 * center - x + psf.size) % psf.size;
+        const mirrorY = (2 * center - y + psf.size) % psf.size;
+        const value = THREE.DataUtils.fromHalfFloat(
+          psf.data[y * psf.size + x],
+        );
+        const mirror = THREE.DataUtils.fromHalfFloat(
+          psf.data[mirrorY * psf.size + mirrorX],
+        );
+        difference += Math.abs(value - mirror);
+        energy += value;
+      }
+    }
+    return difference / energy;
+  };
+
+  assert.ok(asymmetry(clean) < 1e-6);
+  assert.ok(asymmetry(imperfect) > 0.03);
+});
+
+test("scaled half-float PSF storage retains faint optical tails", () => {
+  const unscaled = generateDiffractionPsf({ size: 256, storageScale: 1 });
+  const scaled = generateDiffractionPsf({ size: 256, storageScale: 4096 });
+  const nonzero = (psf) => psf.textureData.reduce(
+    (sum, value) => sum + Number(value !== 0),
+    0,
+  );
+  assert.ok(nonzero(scaled) > nonzero(unscaled) * 4);
+});
+
 test("lens compiler models dispersion, coated Fresnel energy, and two-bounce paths", () => {
   const blue = cauchyIndex(1.652, 58.57, 475);
   const red = cauchyIndex(1.652, 58.57, 650);
@@ -282,7 +328,8 @@ test("sensor-space transport registers to the active perspective projection", ()
 
 test("defaults include an enabled source-glare component and a fine PSF grid", () => {
   assert.ok(SPECTRAL_FLARE_DEFAULTS.glareStrength > 0);
-  assert.equal(SPECTRAL_FLARE_DEFAULTS.psfSize, 512);
+  assert.equal(SPECTRAL_FLARE_DEFAULTS.psfSize, 1024);
+  assert.ok(SPECTRAL_FLARE_DEFAULTS.psfStorageScale > 1);
 });
 
 test("blade streak count follows iris parity: 2N spikes when odd, N when even", () => {

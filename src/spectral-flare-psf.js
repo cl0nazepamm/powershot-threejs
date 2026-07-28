@@ -51,21 +51,104 @@ function polygonRadius(angle, blades, roundness) {
   return polygon * (1 - roundness) + roundness;
 }
 
-function makeApertureMask(size, blades, roundness, rotation, fill) {
+function scratchProfile(x, y, angle, offset, halfLength, width) {
+  const tangentX = Math.cos(angle);
+  const tangentY = Math.sin(angle);
+  const along = x * tangentX + y * tangentY;
+  const across = -x * tangentY + y * tangentX - offset;
+  const line = Math.exp(-0.5 * (across / width) ** 2);
+  const ends = Math.exp(-((Math.abs(along) / halfLength) ** 8));
+  return line * ends;
+}
+
+function makeApertureMask(
+  size,
+  blades,
+  roundness,
+  rotation,
+  fill,
+  wavefrontError,
+  edgeVariation,
+  scatterStrength,
+  imperfectionSeed,
+) {
   const real = new Float64Array(size * size);
   const imag = new Float64Array(size * size);
+  const seedPhase = imperfectionSeed * 0.754877666;
   for (let y = 0; y < size; y += 1) {
     const py = ((y + 0.5) / size - 0.5) * 2;
     for (let x = 0; x < size; x += 1) {
       const px = ((x + 0.5) / size - 0.5) * 2;
-      const radius = Math.hypot(px, py) / fill;
-      const angle = Math.atan2(py, px) - rotation;
-      const boundary = polygonRadius(angle, blades, roundness);
+      const pupilX = px / fill;
+      const pupilY = py / fill;
+      const radius = Math.hypot(pupilX, pupilY);
+      const sensorAngle = Math.atan2(py, px);
+      const apertureAngle = sensorAngle - rotation;
+      const edgeSignature = 0.52 * Math.sin(apertureAngle * 5 + seedPhase)
+        + 0.31 * Math.sin(apertureAngle * 11 - seedPhase * 1.7)
+        + 0.17 * Math.sin(apertureAngle * 17 + seedPhase * 0.43);
+      const boundary = polygonRadius(apertureAngle, blades, roundness)
+        * (1 + edgeVariation * edgeSignature);
       const edge = 1.5 / (size * fill);
       const coverage = Math.max(0, Math.min(1, (boundary + edge - radius) / (2 * edge)));
-      // A mild smoothstep is enough to anti-alias the pupil edge without
-      // changing its total aperture area materially.
-      real[y * size + x] = coverage * coverage * (3 - 2 * coverage);
+      const aperture = coverage * coverage * (3 - 2 * coverage);
+      if (aperture <= 0) continue;
+
+      const rho = Math.min(1.25, radius / Math.max(1e-6, boundary));
+      const rho2 = rho * rho;
+      const rho3 = rho2 * rho;
+      const coma = (3 * rho3 - 2 * rho)
+        * Math.cos(sensorAngle - 0.61 - seedPhase * 0.03);
+      const astigmatism = rho2 * Math.cos(
+        sensorAngle * 2 + 0.37 + seedPhase * 0.02,
+      );
+      const trefoil = rho3 * Math.cos(
+        sensorAngle * 3 - 1.19 - seedPhase * 0.01,
+      );
+      const fine = Math.sin(
+        Math.PI * (pupilX * 6.7 + pupilY * 2.9) + seedPhase,
+      ) * Math.sin(
+        Math.PI * (pupilY * 5.1 - pupilX * 3.6) - seedPhase * 0.61,
+      );
+      const wave = wavefrontError * (
+        coma * 0.56 + astigmatism * 0.29 + trefoil * 0.13 + fine * 0.02
+      );
+      const phase = Math.PI * 2 * wave;
+
+      const scratches = scratchProfile(
+        pupilX,
+        pupilY,
+        0.19 + seedPhase * 0.01,
+        0.16,
+        0.68,
+        0.0038,
+      ) * 0.9 + scratchProfile(
+        pupilX,
+        pupilY,
+        -0.91 - seedPhase * 0.008,
+        -0.23,
+        0.54,
+        0.0027,
+      ) * 0.62 + scratchProfile(
+        pupilX,
+        pupilY,
+        1.73 + seedPhase * 0.006,
+        0.31,
+        0.42,
+        0.0049,
+      ) * 0.48;
+      const dust = Math.exp(
+        -((pupilX - 0.29) ** 2 + (pupilY + 0.24) ** 2) / (2 * 0.019 ** 2),
+      ) * 0.55 + Math.exp(
+        -((pupilX + 0.36) ** 2 + (pupilY - 0.12) ** 2) / (2 * 0.013 ** 2),
+      ) * 0.35;
+      const transmission = aperture * Math.max(
+        0,
+        1 - scatterStrength * (scratches + dust),
+      );
+      const index = y * size + x;
+      real[index] = transmission * Math.cos(phase);
+      imag[index] = transmission * Math.sin(phase);
     }
   }
   return { real, imag };
@@ -114,12 +197,17 @@ function convolveFiniteSun(psf, size, sigmaPixels) {
 }
 
 export function generateDiffractionPsf({
-  size = 256,
+  size = 1024,
   blades = 7,
   roundness = 0.08,
   rotation = 0,
   apertureFill = 0.88,
   finiteSunSigmaPixels = 0,
+  wavefrontError = 0.055,
+  edgeVariation = 0.004,
+  scatterStrength = 0.035,
+  imperfectionSeed = 11.73,
+  storageScale = 4096,
 } = {}) {
   if (size < 32 || (size & (size - 1)) !== 0) {
     throw new RangeError("Diffraction PSF size must be a power of two >= 32.");
@@ -128,12 +216,21 @@ export function generateDiffractionPsf({
     throw new RangeError("Aperture blade count must be an integer from 3 to 32.");
   }
 
+  const safeWavefrontError = Math.max(0, Math.min(0.5, wavefrontError));
+  const safeEdgeVariation = Math.max(0, Math.min(0.05, edgeVariation));
+  const safeScatterStrength = Math.max(0, Math.min(0.5, scatterStrength));
+  const safeImperfectionSeed = Number.isFinite(imperfectionSeed) ? imperfectionSeed : 11.73;
+  const safeStorageScale = Math.max(1, Math.min(32768, storageScale));
   const { real, imag } = makeApertureMask(
     size,
     blades,
     Math.max(0, Math.min(1, roundness)),
     rotation,
     Math.max(0.1, Math.min(0.98, apertureFill)),
+    safeWavefrontError,
+    safeEdgeVariation,
+    safeScatterStrength,
+    safeImperfectionSeed,
   );
   fft2d(real, imag, size);
 
@@ -161,8 +258,11 @@ export function generateDiffractionPsf({
   for (let i = 0; i < psf.length; i += 1) finalEnergy += psf[i];
   const normalize = 1 / Math.max(1e-30, finalEnergy);
   const halfData = new Uint16Array(psf.length);
+  const textureData = new Uint16Array(psf.length);
   for (let i = 0; i < psf.length; i += 1) {
-    halfData[i] = THREE.DataUtils.toHalfFloat(psf[i] * normalize);
+    const value = psf[i] * normalize;
+    halfData[i] = THREE.DataUtils.toHalfFloat(value);
+    textureData[i] = THREE.DataUtils.toHalfFloat(value * safeStorageScale);
   }
 
   return {
@@ -172,18 +272,29 @@ export function generateDiffractionPsf({
     rotation,
     apertureFill,
     finiteSunSigmaPixels,
+    wavefrontError: safeWavefrontError,
+    edgeVariation: safeEdgeVariation,
+    scatterStrength: safeScatterStrength,
+    imperfectionSeed: safeImperfectionSeed,
+    storageScale: safeStorageScale,
     data: halfData,
+    textureData,
   };
 }
 
 export function createDiffractionPsfTexture(options = {}) {
   const key = JSON.stringify({
-    size: options.size ?? 256,
+    size: options.size ?? 1024,
     blades: options.blades ?? 7,
     roundness: options.roundness ?? 0.08,
     rotation: options.rotation ?? 0,
     apertureFill: options.apertureFill ?? 0.88,
     finiteSunSigmaPixels: options.finiteSunSigmaPixels ?? 0,
+    wavefrontError: options.wavefrontError ?? 0.055,
+    edgeVariation: options.edgeVariation ?? 0.004,
+    scatterStrength: options.scatterStrength ?? 0.035,
+    imperfectionSeed: options.imperfectionSeed ?? 11.73,
+    storageScale: options.storageScale ?? 4096,
   });
   const cached = PSF_CACHE.get(key);
   if (cached) {
@@ -193,7 +304,7 @@ export function createDiffractionPsfTexture(options = {}) {
 
   const generated = generateDiffractionPsf(options);
   const texture = new THREE.DataTexture(
-    generated.data,
+    generated.textureData,
     generated.size,
     generated.size,
     THREE.RedFormat,

@@ -62,7 +62,7 @@ export const SPECTRAL_FLARE_DEFAULTS = Object.freeze({
   enabled: true,
   strength: 1,
   ghostStrength: 1,
-  diffractionStrength: 5,
+  diffractionStrength: 1,
   glareStrength: 1,
   veilingStrength: 0.06,
   fNumber: 8,
@@ -78,7 +78,12 @@ export const SPECTRAL_FLARE_DEFAULTS = Object.freeze({
   sharpVisibilitySeconds: 0.055,
   veilVisibilitySeconds: 0.32,
   diffractionScale: 1,
-  psfSize: 512,
+  psfSize: 1024,
+  pupilWavefrontError: 0.055,
+  pupilEdgeVariation: 0.004,
+  pupilScatterStrength: 0.035,
+  pupilImperfectionSeed: 11.73,
+  psfStorageScale: 4096,
   ghostRadianceScale: 20,
 });
 
@@ -416,7 +421,6 @@ export class SpectralLensFlarePipeline {
       apertureBlades: uniform(this.settings.apertureBlades),
       apertureRoundness: uniform(this.settings.apertureRoundness),
       apertureRotation: uniform(this.settings.apertureRotation),
-      spikeHarmonic: uniform(apertureSpikeHarmonic(this.settings.apertureBlades)),
       housingClip: uniform(this.settings.housingClip),
       angleIndex: uniform(0, "uint"),
       angleMix: uniform(0),
@@ -468,6 +472,11 @@ export class SpectralLensFlarePipeline {
       blades: this.settings.apertureBlades,
       roundness: this.settings.apertureRoundness,
       rotation: this.settings.apertureRotation,
+      wavefrontError: this.settings.pupilWavefrontError,
+      edgeVariation: this.settings.pupilEdgeVariation,
+      scatterStrength: this.settings.pupilScatterStrength,
+      imperfectionSeed: this.settings.pupilImperfectionSeed,
+      storageScale: this.settings.psfStorageScale,
     });
     this._psfNode = texture(this._psf.texture);
 
@@ -682,7 +691,12 @@ export class SpectralLensFlarePipeline {
       }
       psf = psf
         .div(solarSamples.length)
-        .mul(energyCorrection * this._psf.size * this._psf.size);
+        .mul(
+          energyCorrection
+          * this._psf.size
+          * this._psf.size
+          / this._psf.storageScale,
+        );
       spectral = spectral.add(vec3(...this._diffractionWeights[i]).mul(psf));
     }
     const visibility = pow(max(this._visibilityNode.r, 0), 1.5);
@@ -729,53 +743,77 @@ export class SpectralLensFlarePipeline {
     const diffraction = max(texture(this.rtDiffraction.texture, screenUV).rgb, vec3(0));
     const veil = max(texture(this.rtVeil.texture, screenUV).rgb, vec3(0));
 
-    // Source glare: the bright scatter halo hugging the sun itself, from
-    // wide-angle surface, coating and sensor-stack scatter. It is much tighter
-    // than the veil, so it is evaluated analytically here at full resolution
-    // instead of passing through the eighth-resolution veil target.
     const delta = screenUV.sub(this.ctx.sunUv).mul(vec2(this.ctx.aspect, 1));
     const radius = delta.length();
     const lobe = (amplitude, scale, exponent) => float(amplitude).div(
       pow(float(1).add(pow(radius.div(scale), 2)), exponent),
     );
-    const halo = lobe(2.2, 0.016, 1.8).add(lobe(0.32, 0.085, 1.4));
+    const halo = lobe(1.7, 0.0115, 1.72)
+      .add(lobe(0.34, 0.036, 1.46))
+      .add(lobe(0.075, 0.11, 1.28));
+    const haloColor = mix(
+      mix(this.ctx.sourceColor, vec3(1), 0.72),
+      vec3(0.46, 0.66, 1.02),
+      smoothstep(0.018, 0.14, radius),
+    );
 
-    // Blade streaks: the far-field continuation of the aperture diffraction
-    // spikes past the bounded PSF quad, fixed to the sensor via the aperture
-    // rotation. screenUV is Y-down while the aperture mask is Y-up, hence the
-    // negation. An iris edge diffracts an optically razor-thin streak along
-    // its normal; the sensor records that streak convolved with the projected
-    // solar disc, so a visible ray keeps a constant linear width of about one
-    // solar diameter while its ~1/r² knife-edge peak decays. Against the sky
-    // it therefore tapers to a point rather than widening into a wedge.
-    const spikeAngle = atan(delta.y.negate(), delta.x).sub(this.ctx.apertureRotation);
-    // sin(m·θ)/m ≈ angular offset from the nearest spike axis; times radius
-    // gives the perpendicular linear distance to that axis.
-    const spikeOffset = radius
-      .mul(abs(sin(spikeAngle.mul(this.ctx.spikeHarmonic))))
-      .div(this.ctx.spikeHarmonic);
-    const streakWidth = max(this.ctx.sunDiskUv.y.mul(1.4), 1e-4);
-    const streakSection = exp(spikeOffset.div(streakWidth).pow(2).negate());
-    // Blade seams are never machine-perfect, so spike strength varies a
-    // little around the iris instead of repeating with mechanical symmetry.
-    const seamVariation = float(0.8).add(sin(spikeAngle.mul(2).add(1.3)).mul(0.2));
-    // Longer wavelengths diffract at wider angles, so the tips trend warm
-    // while the base keeps the source colour.
-    const streakTint = mix(vec3(1), vec3(1.12, 0.94, 0.72), smoothstep(0.03, 0.18, radius));
-    // The inner fade hands the near field back to the measured FFT starburst
-    // instead of double-counting its energy around the solar disc.
-    const streak = lobe(1.2, 0.02, 1.1)
-      .mul(streakSection)
-      .mul(seamVariation)
-      .mul(smoothstep(0.004, 0.012, radius));
+    const ray = (
+      angle,
+      amplitude,
+      positiveLength,
+      negativeLength,
+      widthScale,
+      phase,
+    ) => {
+      const direction = vec2(Math.cos(angle), Math.sin(angle));
+      const normal = vec2(-Math.sin(angle), Math.cos(angle));
+      const along = delta.dot(direction);
+      const distance = abs(along);
+      const across = abs(delta.dot(normal));
+      const length = mix(negativeLength, positiveLength, step(0, along));
+      const spineWidth = max(this.ctx.sunDiskUv.y.mul(0.18), 0.00055)
+        .mul(widthScale)
+        .add(distance.mul(0.004));
+      const shoulderWidth = spineWidth.mul(4.2).add(distance.mul(0.018));
+      const aa = max(fwidth(across), 1e-5);
+      const spine = exp(across.div(max(spineWidth, aa)).pow(2).negate());
+      const shoulder = exp(across.div(max(shoulderWidth, aa)).pow(2).negate()).mul(0.19);
+      const taper = exp(pow(distance.div(length), 1.35).negate());
+      const textureVariation = float(0.91).add(
+        sin(distance.mul(347).add(phase))
+          .mul(sin(distance.mul(113).add(phase * 1.71)))
+          .mul(0.09),
+      );
+      return spine
+        .add(shoulder)
+        .mul(taper)
+        .mul(textureVariation)
+        .mul(smoothstep(0.006, 0.015, radius))
+        .mul(amplitude);
+    };
 
-    // Halo response sits between the starburst (visibility^1.5) and the slow
-    // veil: it dims quickly behind an occluder but keeps some forward scatter.
-    // The streaks are diffraction, so they follow the starburst curve.
+    const scatterRays = ray(1.56, 0.24, 0.03, 0.046, 1, 0.7)
+      .add(ray(0.73, 0.18, 0.027, 0.041, 1.45, 2.1))
+      .add(ray(-0.61, 0.14, 0.036, 0.022, 0.86, 4.4))
+      .add(ray(0.08, 0.085, 0.022, 0.033, 2.05, 5.8));
+
+    const cyanDelta = delta.sub(vec2(0.019, -0.037));
+    const cyanMajor = cyanDelta.dot(vec2(0.24, -0.971)).div(0.024);
+    const cyanMinor = cyanDelta.dot(vec2(0.971, 0.24)).div(0.015);
+    const cyanMask = exp(
+      cyanMajor.pow(2).add(cyanMinor.pow(2)).mul(-0.72),
+    );
+    const scatterColor = mix(
+      haloColor,
+      vec3(0.31, 0.9, 0.86),
+      cyanMask.mul(0.62),
+    );
+
     const glareVisibility = pow(max(this._visibilityNode.r, 0), 1.25);
-    const streakVisibility = pow(max(this._visibilityNode.r, 0), 1.5);
-    const glare = this.ctx.sourceColor
-      .mul(streakTint.mul(streak).mul(streakVisibility).add(halo.mul(glareVisibility)))
+    const glare = scatterColor.mul(halo)
+      .add(vec3(1, 0.99, 0.96).mul(scatterRays))
+      .add(vec3(0.31, 0.9, 0.86).mul(cyanMask).mul(0.045))
+      .mul(glareVisibility)
       .mul(this.ctx.sourceRadiance)
       .mul(this.ctx.totalStrength)
       .mul(this.ctx.glareStrength);
@@ -861,7 +899,6 @@ export class SpectralLensFlarePipeline {
     this.ctx.apertureBlades.value = nextBlades;
     this.ctx.apertureRoundness.value = nextRoundness;
     this.ctx.apertureRotation.value = nextRotation;
-    this.ctx.spikeHarmonic.value = apertureSpikeHarmonic(nextBlades);
     this.ctx.diffractionEnergyScale.value = diffractionPeakScale(
       nextFNumber,
       this.profile.designFNumber,
@@ -874,6 +911,11 @@ export class SpectralLensFlarePipeline {
         blades: nextBlades,
         roundness: nextRoundness,
         rotation: nextRotation,
+        wavefrontError: this.settings.pupilWavefrontError,
+        edgeVariation: this.settings.pupilEdgeVariation,
+        scatterStrength: this.settings.pupilScatterStrength,
+        imperfectionSeed: this.settings.pupilImperfectionSeed,
+        storageScale: this.settings.psfStorageScale,
       });
       this._psfNode.value = this._psf.texture;
     }

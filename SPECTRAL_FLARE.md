@@ -14,19 +14,17 @@ The shipped `Tronnier Heliar 100 mm` profile contains:
 - A 17×17 entrance-pupil grid per path, wavelength, and incidence bin.
 - Sensor position, aperture-plane position, housing radius, thin-film
   throughput, and finite-area pupil-to-sensor flux concentration.
-- A seven-blade Fraunhofer PSF generated from an energy-normalized aperture FFT.
+- A seven-blade Fraunhofer PSF generated from an energy-normalized complex-pupil FFT.
 - Five-wavelength diffraction integration at 430, 480, 530, 590, and 650 nm.
 - Integration over the projected 0.533° solar disc: nine source directions for
   the ghost transport and thirteen taps inside the diffraction pattern. The
   disc radius is derived from the active lens focal length rather than a fixed
   blur kernel.
-- A full-resolution analytic source-glare halo around the sun from wide-angle
-  surface, coating, and sensor-stack scatter, plus blade-aligned streaks that
-  continue the aperture diffraction spikes beyond the PSF window. Each ray
-  keeps a constant linear width of roughly one projected solar diameter and
-  tapers out under a ~1/r² knife-edge decay, with mild per-blade unevenness.
-  Odd blade counts produce doubled spikes, even counts overlap, and the
-  orientation stays fixed to the sensor.
+- A compact full-resolution source-glare response with a clipped white core,
+  cool scatter halo, uneven short streaks, and a small offset cyan lobe. The
+  aperture star remains in the FFT pass instead of being redrawn analytically.
+- Fixed low-order pupil error, minute edge variation, and weak surface defects
+  keep the lens signature stable while avoiding a mathematically perfect star.
 - Three broad analytic veiling-glare lobes.
 
 The generated half-float transfer atlas is 9.84 MiB. Throughput and flux are
@@ -119,7 +117,7 @@ flare.setStrength({
   strength: 1,
   ghosts: 1,
   ghostRadianceScale: 20,
-  diffraction: 5,
+  diffraction: 1,
   glare: 1,
   veiling: 0.06,
 });
@@ -136,13 +134,14 @@ The flare remains active outside the frame until the lens hood acceptance curve
 rejects it. `flare.settings.hoodAngleDeg` controls the fade beyond the atlas's
 30° incidence limit. Ghosts render at three-quarter resolution by default;
 diffraction remains full resolution and the veil renders at one-eighth
-resolution. The source-glare halo is evaluated analytically in the composite,
-so it costs no render target and stays crisp at any resolution. Its response
-curve sits between the starburst and the slow veil so the halo dims quickly
-behind an occluder while keeping a little forward scatter. Set `ghostResolutionScale: 1` at construction for calibration
-captures. Aperture, housing, and pupil-coverage edges use derivative-based pixel
-coverage. The prefiltered diffraction FFT is treated as a continuous energy
-density, and f-stop changes preserve the expected inverse-square integrated
+resolution. The source-glare response is evaluated in the composite, so it
+costs no render target and stays stable at any resolution. Its response curve
+sits between the starburst and the slow veil so the halo dims quickly behind an
+occluder while keeping a little forward scatter. Set `ghostResolutionScale: 1`
+at construction for calibration captures. Aperture, housing, and pupil-coverage
+edges use derivative-based pixel coverage. The prefiltered diffraction FFT is
+treated as a continuous energy density; scaled half-float storage retains its
+faint tail, and f-stop changes preserve the expected inverse-square integrated
 aperture energy while widening the pattern.
 
 `ghostRadianceScale` calibrates the atlas' physical relative throughput to the
