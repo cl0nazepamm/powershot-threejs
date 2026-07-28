@@ -324,13 +324,13 @@ export function parseSpectralFlareAtlas(arrayBuffer, { createTextures = true } =
       atlasAHalf,
       atlasWidth,
       atlasHeight,
-      "PowerShot Heliar transfer A",
+      "Solar Flares Heliar transfer A",
     );
     result.textureB = makeHalfFloatAtlasTexture(
       atlasBHalf,
       atlasWidth,
       atlasHeight,
-      "PowerShot Heliar transfer B",
+      "Solar Flares Heliar transfer B",
     );
   } else {
     // Raw channel views are retained only for the debug/test parse path. The

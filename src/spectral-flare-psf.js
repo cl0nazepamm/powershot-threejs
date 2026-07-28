@@ -311,7 +311,7 @@ export function createDiffractionPsfTexture(options = {}) {
     THREE.RedFormat,
     THREE.HalfFloatType,
   );
-  texture.name = `PowerShot ${generated.blades}-blade diffraction PSF`;
+  texture.name = `Solar Flares ${generated.blades}-blade diffraction PSF`;
   texture.colorSpace = THREE.NoColorSpace;
   texture.minFilter = THREE.LinearMipmapLinearFilter;
   texture.magFilter = THREE.LinearFilter;

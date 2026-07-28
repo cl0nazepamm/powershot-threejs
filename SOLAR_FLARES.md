@@ -1,6 +1,7 @@
-# WebGPU spectral sunlight flare
+# Solar Flares
 
-PowerShot's flare is a scene-linear camera-optics pass. It deliberately does not
+Solar Flares is PowerShot's WebGPU spectral sunlight flare — a scene-linear
+camera-optics pass. It deliberately does not
 use Three.js `Lensflare`, a chain of circles, RGB channel offsets, or bloom as a
 substitute for all flare phenomena.
 

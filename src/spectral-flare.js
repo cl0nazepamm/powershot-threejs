@@ -479,7 +479,7 @@ export class SpectralLensFlarePipeline {
 
     this._ghostWeightsTexture = spectralWeightsTexture(
       this.profile.spectralRgbWeights,
-      "PowerShot ghost spectral weights",
+      "Solar Flares ghost spectral weights",
     );
     this._diffractionWeights = makeSpectralRgbWeights(DIFFRACTION_WAVELENGTHS_NM);
     this._psf = createDiffractionPsfTexture({

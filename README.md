@@ -139,10 +139,10 @@ applyNightshotPreset(nightshot, NIGHTSHOT_PRESETS.nightshot_plus);
 nightshot.renderTexture(inputTexture, frame, { dt: deltaSeconds });
 ```
 
-## Spectral sunlight flare
+## Solar Flares
 
-The spectral flare is a separate scene-linear optical pass, not a sprite effect
-or a digicam preset. It uses a traced Heliar prescription for internal
+Solar Flares, the spectral sunlight flare, is a separate scene-linear optical
+pass, not a sprite effect or a digicam preset. It uses a traced Heliar prescription for internal
 reflections, an aperture FFT for diffraction, a source-centred glare halo, and
 a low-frequency veiling layer.
 Run it before PowerShot, film, exposure, tone mapping, and output conversion:
@@ -183,7 +183,7 @@ when the sun is just outside frame. Scene depth resolves partial on-screen solar
 occlusion. For off-screen occlusion, supply a camera-to-sun visibility provider.
 Run `npm run dev` and open `/powershot-threejs/flare.html` for the interactive
 WebGPU sunlight, aperture, component-isolation, and occlusion demo.
-See [SPECTRAL_FLARE.md](SPECTRAL_FLARE.md) for the optical model, controls,
+See [SOLAR_FLARES.md](SOLAR_FLARES.md) for the optical model, controls,
 PowerShot ordering, and calibration contract.
 
 ## Going further
