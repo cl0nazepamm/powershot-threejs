@@ -16,6 +16,11 @@ import { DEFAULT_SOLAR_DIAMETER_DEG } from "./solar-flare.js";
 export const SOLAR_DIAMETER_DEG = DEFAULT_SOLAR_DIAMETER_DEG;
 const SUN_DISTANCE = 700;
 
+// scratch vectors for the per-frame retroreflector drive
+const _retroProp = new THREE.Vector3();
+const _retroLight = new THREE.Vector3();
+const _retroDir = new THREE.Vector3();
+
 // One MeshStandardMaterial factory for both scenes; `material` keeps the
 // daylight scene's positional style and defaults.
 function std(color, opts = {}) {
@@ -370,6 +375,50 @@ export function createNightScene() {
   person.position.set(-3.4, 0.9, -12.2);
   scene.add(person);
 
+  // ── the critter: retroreflective tapetum eyes ─────────────────────
+  // A crouched cat by the hedge gap, facing the yard. The eyeshine is real
+  // retroreflection: a tapetum returns light to its source, and every
+  // illuminator that can reveal it here is bolted to the camera — so the
+  // visible return is exactly the camera light's irradiance at the eye,
+  // driven per frame through the night rig's update() hook. Depth testing
+  // covers occlusion because the view path IS the illumination path.
+  // (three ships no retroreflective BRDF; this geometry doesn't need one.)
+  const cat = new THREE.Group();
+  const fur = std(0x141210, { roughness: 0.92 });
+  fur.name = "critter_fur";
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.16, 0.30, 6, 10), fur);
+  body.rotation.x = Math.PI / 2; // crouched, long axis toward the yard
+  body.position.set(0, 0.18, -0.06);
+  cat.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 10), fur);
+  head.position.set(0, 0.32, 0.24);
+  cat.add(head);
+  for (const s of [-1, 1]) {
+    const ear = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.1, 6), fur);
+    ear.position.set(s * 0.065, 0.45, 0.20);
+    cat.add(ear);
+  }
+  const tapetum = new THREE.MeshStandardMaterial({
+    color: 0x050505,
+    roughness: 0.4,
+    emissive: 0xd8ffc4,      // green-gold eyeshine; NV renders it near-white
+    emissiveIntensity: 0,    // driven per frame (see driveRetroreflectors)
+  });
+  tapetum.name = "critter_eyes_tapetum";
+  tapetum.userData.nirAlbedo = 0.95; // NV band raster: blazes under the IR flood
+  const eyesAnchor = new THREE.Group();
+  eyesAnchor.position.set(0, 0.34, 0.34);
+  cat.add(eyesAnchor);
+  for (const s of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.032, 10, 8), tapetum);
+    eye.position.set(s * 0.048, 0, 0);
+    eyesAnchor.add(eye);
+  }
+  cat.position.set(2.8, 0, -11);
+  scene.add(cat);
+
+  const retroreflectors = [{ material: tapetum, anchor: eyesAnchor, gain: 110 }];
+
   // ── emitters ──────────────────────────────────────────────────────
   // incandescent porch bulb (Planck tail → NV monster)
   const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 3.0, 8), std(0x14100c));
@@ -431,9 +480,34 @@ export function createNightScene() {
     }
   });
 
+  // Retro return of a camera-mounted spotlight: spot-cone falloff × inverse
+  // square at the prop, scaled by the tapetum gain. The light's mode-aware
+  // intensity is the spectral gate — an 850 nm beam a digital sensor can't
+  // see has intensity 0 there, so the eyes go dark with it.
+  function driveRetroreflectors(illuminator) {
+    for (const r of retroreflectors) {
+      let e = 0;
+      if (illuminator && illuminator.intensity > 0) {
+        r.anchor.getWorldPosition(_retroProp);
+        illuminator.getWorldPosition(_retroLight);
+        const dist = Math.max(1, _retroProp.distanceTo(_retroLight));
+        illuminator.target.getWorldPosition(_retroDir).sub(_retroLight).normalize();
+        const cosAngle = _retroProp.sub(_retroLight).normalize().dot(_retroDir);
+        const cosCone = Math.cos(illuminator.angle);
+        const cosPenumbra = Math.cos(illuminator.angle * (1 - illuminator.penumbra));
+        const cone = THREE.MathUtils.smoothstep(cosAngle, cosCone, cosPenumbra);
+        e = Math.min(60, r.gain * illuminator.intensity * cone / (dist * dist));
+      }
+      r.material.emissiveIntensity = e;
+    }
+  }
+
   return {
     scene,
-    update() {}, // per-frame hook (static yard; parity with the daylight rig)
+    // per-frame hook: aim the tapetum return at whatever light rides the camera
+    update(camera, cameraLight = null) {
+      driveRetroreflectors(cameraLight);
+    },
     view: {
       fov: 58,
       near: 0.1,

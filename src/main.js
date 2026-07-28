@@ -782,7 +782,9 @@ function updateFlashlight() {
     f.intensity = 0;
   }
   f.userData.emitterClass = kind === "led" ? "led" : "ir";
-  f.castShadow = f.intensity > 0; // no shadow pass while the beam is dark
+  // castShadow stays true even while dark: toggling it at runtime leaves
+  // three's WebGPU ShadowNode holding a disposed map (null depthTexture crash
+  // on re-enable). The idle shadow pass over the low-poly yard is cheap.
 }
 
 function activateTexture(tex, kind) {
@@ -1073,7 +1075,7 @@ async function tick() {
   const sceneRig = sceneRigs[activeSourceKind];
   if (sceneRig) {
     sceneRig.controls.update();
-    sceneRig.update(sceneRig.camera);
+    sceneRig.update(sceneRig.camera, sceneRig.flashlight);
     renderer.setRenderTarget(sceneRig.rt);
     renderer.render(sceneRig.scene, sceneRig.camera);
     renderer.setRenderTarget(null);
