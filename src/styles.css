@@ -126,8 +126,10 @@ label {
   text-transform: uppercase;
 }
 
+#exposure-controls,
 #digital-controls,
 #analog-controls,
+#grade-controls,
 #film-controls,
 #infrared-controls {
   display: flex;
@@ -136,8 +138,10 @@ label {
   min-width: 0;
 }
 
+#exposure-controls[hidden],
 #digital-controls[hidden],
 #analog-controls[hidden],
+#grade-controls[hidden],
 #film-controls[hidden],
 #infrared-controls[hidden] {
   display: none;
@@ -155,8 +159,10 @@ label {
 }
 
 #panel > div,
+#exposure-controls > div,
 #digital-controls > div,
 #analog-controls > div,
+#grade-controls > div,
 #film-controls > div,
 #infrared-controls > div,
 #stage-controls {

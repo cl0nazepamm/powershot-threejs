@@ -45,6 +45,15 @@
       <input id="resolution" type="range" min="10" max="100" step="5" value="65">
     </div>
 
+    <!-- pre-process: linear-light gain at the imager's input, so bloom, noise
+         and highlight clip all respond to it (brightness/contrast are post) -->
+    <div id="exposure-controls">
+      <div>
+        <label for="exposure">Exposure (stops) · <span id="exposureval">0.00</span></label>
+        <input id="exposure" type="range" min="-500" max="500" value="0">
+      </div>
+    </div>
+
     <div id="digital-controls">
     <div>
       <label for="preset">Camera preset</label>
@@ -101,15 +110,6 @@
       <input id="jpeghighlight" type="range" min="0" max="200" value="100">
     </div>
 
-    <div>
-      <label for="brightness">Brightness · <span id="brightnessval">0.00</span></label>
-      <input id="brightness" type="range" min="-100" max="100" value="0">
-    </div>
-
-    <div>
-      <label for="contrast">Contrast · <span id="contrastval">0.00</span></label>
-      <input id="contrast" type="range" min="-100" max="100" value="0">
-    </div>
     </div>
 
     <div id="analog-controls" hidden>
@@ -166,6 +166,20 @@
       <div>
         <label for="headswitch">Head switch · <span id="headswitchval">0.12</span></label>
         <input id="headswitch" type="range" min="0" max="300" value="12">
+      </div>
+    </div>
+
+    <!-- post-process: display grade on the finished frame, after the ISP /
+         tape path has already done its physics -->
+    <div id="grade-controls">
+      <div>
+        <label for="brightness">Brightness · <span id="brightnessval">0.00</span></label>
+        <input id="brightness" type="range" min="-100" max="100" value="0">
+      </div>
+
+      <div>
+        <label for="contrast">Contrast · <span id="contrastval">0.00</span></label>
+        <input id="contrast" type="range" min="-100" max="100" value="0">
       </div>
     </div>
 

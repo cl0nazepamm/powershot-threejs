@@ -25,8 +25,12 @@ const els = {
   resolution: document.getElementById("resolution"),
   resolutionval: document.getElementById("resolutionval"),
   preset: document.getElementById("preset"),
+  exposure: document.getElementById("exposure"),
+  exposureval: document.getElementById("exposureval"),
+  exposureControls: document.getElementById("exposure-controls"),
   digitalControls: document.getElementById("digital-controls"),
   analogControls: document.getElementById("analog-controls"),
+  gradeControls: document.getElementById("grade-controls"),
   filmControls: document.getElementById("film-controls"),
   infraredControls: document.getElementById("infrared-controls"),
   nightshotControls: document.getElementById("nightshot-controls"),
@@ -182,6 +186,9 @@ let nightshotPresetKey = "nightshot_plus";
 let resolutionScale = 0.65;
 let busy = false;
 let freezeNoise = false;
+// pre-process: stops of linear-light gain at the ISP / tape input
+let inputExposure = 0;
+// post-process: display grade on the finished frame
 let outputBrightness = 0;
 let outputContrast = 0;
 let electronModelOn = true; // demo default: photoelectron shot noise on
@@ -363,6 +370,15 @@ function wireInput() {
     resolutionScale = Math.min(1, Math.max(0.1, els.resolution.value / 100));
     els.resolutionval.textContent = `${resolutionScale.toFixed(2)}x`;
     resizeForSource();
+  });
+  // Pre-process: photographic stops at the imager's input, ahead of the whole
+  // sensor / tape model — so bloom, noise and highlight clip all move with it.
+  // Film, White Phosphor and NightShot carry their own exposure trim, so this
+  // one only drives the digital/analog Pipeline.
+  els.exposure.addEventListener("input", () => {
+    inputExposure = els.exposure.value / 100;
+    pipeline.setInputExposure(inputExposure);
+    els.exposureval.textContent = inputExposure.toFixed(2);
   });
   els.lens.addEventListener("input", () => {
     const v = els.lens.value / 100;
@@ -614,6 +630,11 @@ function wireInput() {
 }
 
 function syncModeUI() {
+  // the pre/post pair belongs to the Pipeline modes; the other three carry
+  // their own exposure trim inside their own control block
+  const ispMode = mode === "digital" || mode === "analog";
+  els.exposureControls.hidden = !ispMode;
+  els.gradeControls.hidden = !ispMode;
   els.digitalControls.hidden = mode !== "digital";
   els.stageControls.hidden = mode !== "digital";
   els.analogControls.hidden = mode !== "analog" && mode !== "nightshot";
@@ -639,6 +660,8 @@ function syncEffectUI() {
   const lens = pipeline.ctx.P.lensSoftness.value;
   els.resolution.value = Math.round(resolutionScale * 100);
   els.resolutionval.textContent = `${resolutionScale.toFixed(2)}x`;
+
+  setSlider(els.exposure, els.exposureval, inputExposure);
 
   setSlider(els.lens, els.lensval, lens);
 

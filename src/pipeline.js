@@ -99,13 +99,27 @@ function cameraOetf(c) {
   return mix(lo, hi, step(0.0031308, v));
 }
 
-// Source read shared by both input stages. "srgb" (default): the source is an
-// already-encoded image/video — pass through as before. "linear": a
-// scene-linear HDR render target — apply exposure (stops) + the OETF here.
+// Inverse of cameraOetf (exact sRGB decode). An already-encoded plate is a
+// display-referred estimate of the scene, so exposure has to take it back to
+// linear light before the gain — a code-value multiply would scale a
+// gamma-encoded signal and stop being stops.
+function cameraEotf(c) {
+  const v = c.clamp(0.0, 1.0);
+  const lo = v.div(12.92);
+  const hi = pow(v.add(0.055).div(1.055), 2.4);
+  return mix(lo, hi, step(0.04045, v));
+}
+
+// Source read shared by both input stages. Exposure is a photographic gain in
+// linear light, so both encodings land in linear first, take the stops, then
+// go through the camera OETF into the sensor's code-value domain. "srgb"
+// (default): an already-encoded image/video — decode, gain, re-encode (an
+// exact round trip at 0 stops). "linear": a scene-linear HDR render target —
+// gain and encode only.
 function inputRGB(tex, ctx, inputEncoding) {
   const raw = texture(tex, screenUV).rgb;
-  if (inputEncoding !== "linear") return raw;
-  return cameraOetf(raw.max(0.0).mul(exp2s(ctx.sceneExposure)));
+  const linear = inputEncoding === "linear" ? raw.max(0.0) : cameraEotf(raw);
+  return cameraOetf(linear.mul(exp2s(ctx.sceneExposure)));
 }
 
 function stInput(tex, ctx, inputEncoding) {
@@ -1040,8 +1054,8 @@ export function makeUniforms() {
     noiseScale: uniform(1.06),
     outputBrightness: uniform(0),
     outputContrast: uniform(0),
-    // photographic exposure in stops, applied to scene-LINEAR input only
-    // (setInputEncoding("linear")) before the camera OETF
+    // photographic exposure in stops, applied in linear light at the input —
+    // ahead of the whole sensor model, whatever the source encoding is
     sceneExposure: uniform(0),
     P: {
       barrel: uniform(0), ca: uniform(0),
@@ -1277,8 +1291,9 @@ export class Pipeline {
     this.dirty = true;
   }
 
-  // Scene-linear plate gain in photographic stops. This happens before the
-  // camera OETF / ISP; output brightness and contrast remain post-effect.
+  // Plate gain in photographic stops, taken in linear light before the camera
+  // OETF — so the ISP sees it as light, and bloom, noise and highlight clip
+  // all respond to it. Output brightness and contrast remain post-effect.
   setInputExposure(stops = 0) {
     this.ctx.sceneExposure.value = Number.isFinite(stops) ? stops : 0;
   }
