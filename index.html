@@ -45,8 +45,8 @@
       <input id="resolution" type="range" min="10" max="100" step="5" value="65">
     </div>
 
-    <!-- pre-process: linear-light gain at the imager's input, so bloom, noise
-         and highlight clip all respond to it (brightness/contrast are post) -->
+    <!-- one shared pre-process control: linear-light gain at every imager's
+         input, so bloom, grain, noise and highlight response all move with it -->
     <div id="exposure-controls">
       <div>
         <label for="exposure">Exposure (stops) · <span id="exposureval">0.00</span></label>
@@ -169,8 +169,8 @@
       </div>
     </div>
 
-    <!-- post-process: display grade on the finished frame, after the ISP /
-         tape path has already done its physics -->
+    <!-- one shared post-process control: display grade on the finished frame,
+         after the active imager has already done its physics -->
     <div id="grade-controls">
       <div>
         <label for="brightness">Brightness · <span id="brightnessval">0.00</span></label>
@@ -187,11 +187,6 @@
       <div>
         <label for="filmpreset">Film stock</label>
         <select id="filmpreset"></select>
-      </div>
-
-      <div>
-        <label for="filmexposure">Exposure (stops) · <span id="filmexposureval">0.00</span></label>
-        <input id="filmexposure" type="range" min="-300" max="300" value="0">
       </div>
 
       <div>
@@ -269,11 +264,6 @@
       </div>
 
       <div>
-        <label for="infraredexposure">Exposure (stops) · <span id="infraredexposureval">1.00</span></label>
-        <input id="infraredexposure" type="range" min="-200" max="400" value="100">
-      </div>
-
-      <div>
         <label for="infraredresponse">IR response · <span id="infraredresponseval">0.00</span></label>
         <input id="infraredresponse" type="range" min="0" max="100" value="0">
       </div>
@@ -317,11 +307,6 @@
     </div>
 
     <div id="nightshot-controls" hidden>
-      <div>
-        <label for="nightshotexposure">Exposure (stops) · <span id="nightshotexposureval">0.00</span></label>
-        <input id="nightshotexposure" type="range" min="-200" max="400" value="0">
-      </div>
-
       <div>
         <label for="nightshotgamma">Input gamma · <span id="nightshotgammaval">1.00</span></label>
         <input id="nightshotgamma" type="range" min="35" max="200" value="100">

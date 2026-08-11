@@ -35,8 +35,6 @@ const els = {
   infraredControls: document.getElementById("infrared-controls"),
   nightshotControls: document.getElementById("nightshot-controls"),
   filmpreset: document.getElementById("filmpreset"),
-  filmexposure: document.getElementById("filmexposure"),
-  filmexposureval: document.getElementById("filmexposureval"),
   filmgamma: document.getElementById("filmgamma"),
   filmgammaval: document.getElementById("filmgammaval"),
   filmgrain: document.getElementById("filmgrain"),
@@ -65,8 +63,6 @@ const els = {
   filmflickerval: document.getElementById("filmflickerval"),
   filmnegview: document.getElementById("filmnegview"),
   infraredpreset: document.getElementById("infraredpreset"),
-  infraredexposure: document.getElementById("infraredexposure"),
-  infraredexposureval: document.getElementById("infraredexposureval"),
   infraredresponse: document.getElementById("infraredresponse"),
   infraredresponseval: document.getElementById("infraredresponseval"),
   infraredlocalgain: document.getElementById("infraredlocalgain"),
@@ -81,8 +77,6 @@ const els = {
   infraredvignetteval: document.getElementById("infraredvignetteval"),
   infraredhotspot: document.getElementById("infraredhotspot"),
   infraredhotspotval: document.getElementById("infraredhotspotval"),
-  nightshotexposure: document.getElementById("nightshotexposure"),
-  nightshotexposureval: document.getElementById("nightshotexposureval"),
   nightshotgamma: document.getElementById("nightshotgamma"),
   nightshotgammaval: document.getElementById("nightshotgammaval"),
   nightshotresponse: document.getElementById("nightshotresponse"),
@@ -186,9 +180,9 @@ let nightshotPresetKey = "nightshot_plus";
 let resolutionScale = 0.65;
 let busy = false;
 let freezeNoise = false;
-// pre-process: stops of linear-light gain at the ISP / tape input
+// pre-process: one shared stop-space plate gain for every imager
 let inputExposure = 0;
-// post-process: display grade on the finished frame
+// post-process: one shared display grade on every finished frame
 let outputBrightness = 0;
 let outputContrast = 0;
 let electronModelOn = true; // demo default: photoelectron shot noise on
@@ -203,6 +197,16 @@ let electronsPerUnit = 1024;
 // classic Pipeline in analog mode, or NightShot's internal tape stage — the
 // same wiring maxjs uses, so NightShot exposes the full VHS control set.
 const activeAnalogP = () => (mode === "nightshot" ? nightshotPipeline.cam : pipeline).ctx.P;
+
+function applyInputExposure() {
+  for (const p of pipelines) p.setInputExposure?.(inputExposure);
+}
+
+function applyOutputGrading() {
+  for (const p of pipelines) {
+    p.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
+  }
+}
 
 // fps tracking
 let fpsLast = performance.now();
@@ -254,6 +258,8 @@ async function init() {
   applyFilmPreset(filmPipeline.ctx, FILM_PRESETS[filmPresetKey]);
   applyInfraredProfile(infraredPipeline, INFRARED_PRESETS[infraredPresetKey]);
   applyNightshotPreset(nightshotPipeline, NIGHTSHOT_PRESETS[nightshotPresetKey]);
+  applyInputExposure();
+  applyOutputGrading();
   applyElectronModel();
   // land on the live 3D scene; the default photo lazy-loads on Source → file
   setActiveSource("day");
@@ -371,13 +377,12 @@ function wireInput() {
     els.resolutionval.textContent = `${resolutionScale.toFixed(2)}x`;
     resizeForSource();
   });
-  // Pre-process: photographic stops at the imager's input, ahead of the whole
-  // sensor / tape model — so bloom, noise and highlight clip all move with it.
-  // Film, White Phosphor and NightShot carry their own exposure trim, so this
-  // one only drives the digital/analog Pipeline.
+  // Pre-process: one photographic plate gain ahead of every imager. Each
+  // pipeline keeps its preset calibration trim internally; this host control
+  // never writes those P.exposure uniforms directly.
   els.exposure.addEventListener("input", () => {
     inputExposure = els.exposure.value / 100;
-    pipeline.setInputExposure(inputExposure);
+    applyInputExposure();
     els.exposureval.textContent = inputExposure.toFixed(2);
   });
   els.lens.addEventListener("input", () => {
@@ -430,11 +435,6 @@ function wireInput() {
     pipeline.ctx.P.jpegHighlight.value = v;
     els.jpeghighlightval.textContent = v.toFixed(2);
   });
-  const applyOutputGrading = () => {
-    for (const p of pipelines) {
-      p.setOutputColorGrading?.({ brightness: outputBrightness, contrast: outputContrast });
-    }
-  };
   els.brightness.addEventListener("input", () => {
     outputBrightness = els.brightness.value / 100;
     applyOutputGrading();
@@ -509,7 +509,6 @@ function wireInput() {
     });
   };
   const FP = () => filmPipeline.ctx.P;
-  wireFilmSlider(els.filmexposure, els.filmexposureval, (v) => { FP().exposure.value = v; });
   wireFilmSlider(els.filmgamma, els.filmgammaval, (v) => { FP().inputGamma.value = v; });
   wireFilmSlider(els.filmgrain, els.filmgrainval, (v) => { FP().grainStrength.value = v; });
   wireFilmSlider(els.filmgrainsize, els.filmgrainsizeval, (v) => { FP().grainSize.value = v; });
@@ -538,7 +537,6 @@ function wireInput() {
     });
   };
   const IP = () => infraredPipeline.ctx.P;
-  wireInfraredSlider(els.infraredexposure, els.infraredexposureval, (v) => { IP().exposure.value = v; });
   wireInfraredSlider(els.infraredresponse, els.infraredresponseval, (v) => { IP().nirInput.value = v; });
   wireInfraredSlider(els.infraredlocalgain, els.infraredlocalgainval, (v) => { IP().localGain.value = v; });
   wireInfraredSlider(els.infraredglow, els.infraredglowval, (v) => { IP().glowStrength.value = v; });
@@ -555,7 +553,6 @@ function wireInput() {
     });
   };
   const NS = () => nightshotPipeline.ir.ctx.P;
-  wireNightshotSlider(els.nightshotexposure, els.nightshotexposureval, (v) => { NS().exposure.value = v; });
   wireNightshotSlider(els.nightshotgamma, els.nightshotgammaval, (v) => { NS().inputGamma.value = v; });
   wireNightshotSlider(els.nightshotresponse, els.nightshotresponseval, (v) => { NS().nirInput.value = v; });
   wireNightshotSlider(els.nightshotsmear, els.nightshotsmearval, (v) => { nightshotPipeline.ctx.P.smear.value = v; });
@@ -630,11 +627,10 @@ function wireInput() {
 }
 
 function syncModeUI() {
-  // the pre/post pair belongs to the Pipeline modes; the other three carry
-  // their own exposure trim inside their own control block
-  const ispMode = mode === "digital" || mode === "analog";
-  els.exposureControls.hidden = !ispMode;
-  els.gradeControls.hidden = !ispMode;
+  // The same plate exposure and finished-frame grade stay visible for every
+  // imager; the mode blocks below expose only effect-specific controls.
+  els.exposureControls.hidden = false;
+  els.gradeControls.hidden = false;
   els.digitalControls.hidden = mode !== "digital";
   els.stageControls.hidden = mode !== "digital";
   els.analogControls.hidden = mode !== "analog" && mode !== "nightshot";
@@ -729,7 +725,6 @@ function syncEffectUI() {
   setSlider(els.headswitch, els.headswitchval, headSwitch);
 
   const FP = filmPipeline.ctx.P;
-  setSlider(els.filmexposure, els.filmexposureval, FP.exposure.value);
   setSlider(els.filmgamma, els.filmgammaval, FP.inputGamma.value);
   setSlider(els.filmgrain, els.filmgrainval, FP.grainStrength.value);
   setSlider(els.filmgrainsize, els.filmgrainsizeval, FP.grainSize.value);
@@ -746,7 +741,6 @@ function syncEffectUI() {
 
   const IP = infraredPipeline.ctx.P;
   els.infraredpreset.value = infraredPresetKey;
-  setSlider(els.infraredexposure, els.infraredexposureval, IP.exposure.value);
   setSlider(els.infraredresponse, els.infraredresponseval, IP.nirInput.value);
   setSlider(els.infraredlocalgain, els.infraredlocalgainval, IP.localGain.value);
   setSlider(els.infraredglow, els.infraredglowval, IP.glowStrength.value);
@@ -756,7 +750,6 @@ function syncEffectUI() {
   setSlider(els.infraredhotspot, els.infraredhotspotval, IP.hotspot.value);
 
   const NS = nightshotPipeline.ir.ctx.P;
-  setSlider(els.nightshotexposure, els.nightshotexposureval, NS.exposure.value);
   setSlider(els.nightshotgamma, els.nightshotgammaval, NS.inputGamma.value);
   setSlider(els.nightshotresponse, els.nightshotresponseval, NS.nirInput.value);
   setSlider(els.nightshotsmear, els.nightshotsmearval, nightshotPipeline.ctx.P.smear.value);
