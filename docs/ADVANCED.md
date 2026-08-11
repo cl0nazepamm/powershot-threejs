@@ -1,6 +1,6 @@
 # PowerShot advanced guide
 
-Fine-grained controls, linear/HDR input, `THREE.RenderPipeline` integration, real NIR input, and the repo layout. For basic per-mode usage see the [README](README.md).
+Fine-grained controls, linear/HDR input, `THREE.RenderPipeline` integration, real NIR input, and the repo layout. For basic per-mode usage see the [README](../README.md).
 
 ## Controls shared by every mode
 

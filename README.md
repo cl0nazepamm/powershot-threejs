@@ -66,7 +66,7 @@ stack your own manipulations first and put the camera last. Two rules:
 
 Adapters auto-size to the source; pass `{ autoSize: false }` or
 `{ resolutionScale }` to manage effect resolution yourself. See
-[ADVANCED.md](ADVANCED.md) for the full adapter contract.
+[docs/ADVANCED.md](docs/ADVANCED.md) for the full adapter contract.
 
 ## Processing images and videos
 
@@ -86,7 +86,7 @@ The input texture can be an image, a video, or a render target's `.texture`.
 sees; call `setSize(w, h)` first to pick your own (e.g. a low
 authentic-camera resolution). When you need deterministic control — explicit
 frame numbers, fixed `dt`, an output render target — use
-`renderTexture(texture, frame, options)`; see [ADVANCED.md](ADVANCED.md).
+`renderTexture(texture, frame, options)`; see [docs/ADVANCED.md](docs/ADVANCED.md).
 
 ## Digicam
 
@@ -217,12 +217,12 @@ when the sun is just outside frame. Scene depth resolves partial on-screen solar
 occlusion. For off-screen occlusion, supply a camera-to-sun visibility provider.
 Run `npm run dev` and open `/powershot-threejs/flare.html` for the interactive
 WebGPU sunlight, aperture, component-isolation, and occlusion demo.
-See [SOLAR_FLARES.md](SOLAR_FLARES.md) for the optical model, controls,
+See [docs/SOLAR_FLARES.md](docs/SOLAR_FLARES.md) for the optical model, controls,
 PowerShot ordering, and calibration contract.
 
 ## Going further
 
-Per-mode controls, linear/HDR input, output grading, `THREE.RenderPipeline` integration, real NIR input and the repo layout are in [ADVANCED.md](ADVANCED.md).
+Per-mode controls, linear/HDR input, output grading, `THREE.RenderPipeline` integration, real NIR input and the repo layout are in [docs/ADVANCED.md](docs/ADVANCED.md).
 
 # Acknowledgements
 
