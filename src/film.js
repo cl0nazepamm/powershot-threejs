@@ -126,6 +126,13 @@ function weavedUV(ctx) {
 // scene, so the fitted film curves, mid-grey neutrality and grain/halation
 // calibration are untouched. Applied before the exposure gain so the
 // exposure slider stays "stops at the film plane".
+//
+// Two gains ride the same stop domain: P.exposure is the stock's own trim
+// (preset data, reset by applyFilmPreset) and ctx.inputExposure is the host's
+// plate gain ahead of the imager — the same pre-effect exposure the digital
+// Pipeline and the tube take, so a host can drive every mode from one control.
+// Both land here, in linear light, before the H&D response: grain, halation
+// and the print shoulder all move with them, which is the point.
 function sceneExposure(srcTex, ctx, uv, inputEncoding = "srgb") {
   const raw = texture(srcTex, uv).rgb;
   // "srgb" (default): typical canvas/video input, decode to linear here.
@@ -133,7 +140,7 @@ function sceneExposure(srcTex, ctx, uv, inputEncoding = "srgb") {
   // crushes shadows and shifts the whole H&D curve fit).
   const lin = inputEncoding === "linear" ? raw.max(0.0) : srgbToLinear(raw);
   const flat = lin.div(0.18).max(1e-7).pow(ctx.P.inputGamma).mul(0.18);
-  return flat.mul(exp2u(ctx.P.exposure));
+  return flat.mul(exp2u(ctx.P.exposure.add(ctx.inputExposure)));
 }
 
 // Density-domain grain: gaussian cell noise bilinearly interpolated at the
@@ -331,6 +338,9 @@ export function makeFilmUniforms() {
     // post-effect grade on the linear print (powershotLinearGrade)
     outputBrightness: uniform(0),
     outputContrast: uniform(0),
+    // Extra scene-linear plate gain in stops, before the film response. Kept
+    // separate from P.exposure so host exposure can stack with the stock trim.
+    inputExposure: uniform(0),
     P: {
       exposure: uniform(0),
       // source contrast trim (not preset data — describes the input medium,
@@ -655,6 +665,13 @@ export class FilmPipeline {
     if (this.inputEncoding === next) return;
     this.inputEncoding = next;
     this.dirty = true;
+  }
+
+  // Host plate gain in stops, ahead of the film response. Uniform-only, so it
+  // never dirties the graph — safe to drive per frame. Stacks with the stock's
+  // own P.exposure and survives setPreset (see makeFilmUniforms).
+  setInputExposure(stops = 0) {
+    this.ctx.inputExposure.value = Number.isFinite(stops) ? stops : 0;
   }
 
   // Accepts a FILM_PRESETS key ("kodak_500t") or a preset object. The classic
