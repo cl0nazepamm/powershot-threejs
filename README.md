@@ -217,8 +217,10 @@ when the sun is just outside frame. Scene depth resolves partial on-screen solar
 occlusion. For off-screen occlusion, supply a camera-to-sun visibility provider.
 Run `npm run dev` and open `/powershot-threejs/flare.html` for the interactive
 WebGPU sunlight, aperture, component-isolation, and occlusion demo.
+The full model targets WebGPU. On the WebGL2 fallback and iOS Safari the pass
+runs a reduced source-plus-glare composite instead of going black.
 See [docs/SOLAR_FLARES.md](docs/SOLAR_FLARES.md) for the optical model, controls,
-PowerShot ordering, and calibration contract.
+PowerShot ordering, backend support, and calibration contract.
 
 ## Going further
 

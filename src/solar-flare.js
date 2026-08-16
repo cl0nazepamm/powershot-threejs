@@ -8,9 +8,7 @@ import {
   float,
   floor,
   fwidth,
-  int,
   instanceIndex,
-  ivec2,
   max,
   min,
   mix,
@@ -22,7 +20,6 @@ import {
   smoothstep,
   step,
   texture,
-  textureLoad,
   uint,
   uniform,
   uv,
@@ -215,6 +212,15 @@ function makeGhostGridGeometry(gridSize, instanceCount) {
 
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  // WebGL (iPhone tsl_gl) ignores instanceCount unless at least one
+  // instanced attribute is present. The values are unused; TSL reads
+  // instanceIndex from the draw call.
+  const instanceIds = new Float32Array(instanceCount);
+  for (let i = 0; i < instanceCount; i += 1) instanceIds[i] = i;
+  geometry.setAttribute(
+    "instanceId",
+    new THREE.InstancedBufferAttribute(instanceIds, 1),
+  );
   geometry.instanceCount = instanceCount;
   geometry.computeBoundingSphere();
   return geometry;
@@ -241,11 +247,15 @@ function makeNodeMaterial(colorNode, { positionNode = null, blending = false } =
 }
 
 function createHalfTexture(data, width, name) {
-  const padded = new Uint16Array(width * 4);
+  // WebGPU copies with height > 1 need 256-byte rows. A 3-wide rgba16float
+  // texture is 24 bytes/row; Safari iOS rejects that even for height 1.
+  // Pad to 32 texels (256 bytes) so the upload is valid on every backend.
+  const paddedWidth = Math.max(width, 32);
+  const padded = new Uint16Array(paddedWidth * 4);
   padded.set(data);
   const result = new THREE.DataTexture(
     padded,
-    width,
+    paddedWidth,
     1,
     THREE.RGBAFormat,
     THREE.HalfFloatType,
@@ -462,8 +472,10 @@ export class SolarFlarePipeline {
     });
     this._diffractionVisible = false;
     this.rtVeil = makeTarget(1, 1);
+    // RGBA, not RedFormat: iOS WebGL2 cannot render to R16F (incomplete FBO
+    // → clear/draw hits the canvas as a black rectangle). Visibility only
+    // reads .r, so an RGBA16F 1×1 is the same value.
     this.rtVisibilityRaw = makeTarget(1, 1, {
-      format: THREE.RedFormat,
       minFilter: THREE.NearestFilter,
       magFilter: THREE.NearestFilter,
     });
@@ -474,7 +486,12 @@ export class SolarFlarePipeline {
     this._placeholderDepth.minFilter = THREE.NearestFilter;
     this._placeholderDepth.magFilter = THREE.NearestFilter;
     this._depthNode = texture(this._placeholderDepth);
-    this._sourceNode = texture(this._placeholderDepth, screenUV);
+    // Color placeholder — TSL locks sampler type from the first texture.
+    // A DepthTexture here made the plate sample 0 on iPhone (black box).
+    this._placeholderColor = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+    this._placeholderColor.needsUpdate = true;
+    this._placeholderColor.colorSpace = THREE.NoColorSpace;
+    this._sourceNode = texture(this._placeholderColor, screenUV);
     this._visibilityNode = texture(this.rtVisibilityA.texture, vec2(0.5));
 
     this._ghostWeightsTexture = spectralWeightsTexture(
@@ -580,6 +597,7 @@ export class SolarFlarePipeline {
     const angleCount = uint(this.profile.angleCount);
     const gridVertexCount = uint(this.profile.gridVertexCount);
     const atlasWidth = uint(this.profile.atlasWidth);
+    const atlasSize = vec2(this.profile.atlasWidth, this.profile.atlasHeight);
     const instance = uint(instanceIndex);
     const wavelengthIndex = mod(instance, wavelengthCount);
     const pathIndex = instance.div(wavelengthCount);
@@ -591,9 +609,14 @@ export class SolarFlarePipeline {
       .add(angleIndex)
       .mul(gridVertexCount)
       .add(vertex);
-    const atlasLoad = (atlas, record) => textureLoad(
+    // texture() not textureLoad(): iOS Safari rejects texelFetch in the
+    // vertex stage (ghost positions come from the atlas). Nearest sampling
+    // of the texel center is the same fetch.
+    const atlasLoad = (atlas, record) => texture(
       atlas,
-      ivec2(int(mod(record, atlasWidth)), int(record.div(atlasWidth))),
+      vec2(float(mod(record, atlasWidth)), float(record.div(atlasWidth)))
+        .add(0.5)
+        .div(atlasSize),
     );
 
     const record0 = recordFor(this.ctx.angleIndex);
@@ -627,7 +650,10 @@ export class SolarFlarePipeline {
     );
     const vValid = varying(transferB.w, "vFlareValid");
     const vSpectralWeight = varying(
-      textureLoad(this._ghostWeightsTexture, ivec2(int(wavelengthIndex), 0)).rgb,
+      texture(
+        this._ghostWeightsTexture,
+        vec2(float(wavelengthIndex).add(0.5).div(this._ghostWeightsTexture.image.width), 0.5),
+      ).rgb,
       "vFlareSpectralWeight",
     );
 
@@ -852,6 +878,43 @@ export class SolarFlarePipeline {
       source.rgb.add(ghost).add(diffraction).add(glare).add(veil),
       source.a,
     ));
+  }
+
+  // iPhone tsl_gl cannot swap a texture() node's .value after compile — it
+  // keeps the 1×1 placeholder and the plate goes black. Rebuild from the
+  // real input, same as the film pipeline. The WebGL path also uses a tiny
+  // source+halo shader; the full ghost/PSF composite is too big for that
+  // backend and a failed draw leaves the output target black.
+  _isWebGLBackend() {
+    return this.renderer?.backend?.isWebGLBackend === true
+      || /iPhone|iPod|iPad/i.test(globalThis.navigator?.userAgent || '');
+  }
+
+  _bindSource(inputTexture) {
+    if (!inputTexture) return;
+    if (this._boundSource === inputTexture && this.blitMaterial) return;
+    this._boundSource = inputTexture;
+    this._sourceNode = texture(inputTexture, screenUV);
+    try { this.blitMaterial?.dispose(); } catch (_) { /* first bind */ }
+    this.blitMaterial = makeNodeMaterial(vec4(this._sourceNode.rgb, 1));
+    this._buildCompositeMaterial();
+    this._buildSimpleCompositeMaterial();
+  }
+
+  _buildSimpleCompositeMaterial() {
+    const source = this._sourceNode;
+    const delta = screenUV.sub(this.ctx.sunUv).mul(vec2(this.ctx.aspect, 1));
+    const radius = delta.length();
+    const halo = float(1.7).div(pow(float(1).add(pow(radius.div(0.0115), 2)), 1.72))
+      .add(float(0.34).div(pow(float(1).add(pow(radius.div(0.036), 2)), 1.46)));
+    const glare = this.ctx.sourceColor
+      .mul(halo)
+      .mul(this.ctx.hoodAcceptance)
+      .mul(this.ctx.sourceRadiance)
+      .mul(this.ctx.totalStrength)
+      .mul(this.ctx.glareStrength);
+    try { this.simpleCompositeMaterial?.dispose(); } catch (_) { /* first bind */ }
+    this.simpleCompositeMaterial = makeNodeMaterial(vec4(source.rgb.add(glare), 1));
   }
 
   setCamera(camera) {
@@ -1259,7 +1322,7 @@ export class SolarFlarePipeline {
     const height = Math.max(1, Math.round(options.height || this.size.height || fallback.height));
     this.setSize(width, height);
     this.source = inputTexture;
-    this._sourceNode.value = inputTexture;
+    this._bindSource(inputTexture);
     const sunState = this._updateSunState(camera, sun, options);
     this._updateDiffractionPlacement();
 
@@ -1271,14 +1334,24 @@ export class SolarFlarePipeline {
     renderer.autoClear = false;
 
     try {
-      this._renderVisibility(options.depthTexture || null);
-      this._renderGhosts(sunState.cameraDirection, sunState.angularRadius);
-      this._renderDiffraction();
-      this._renderVeil();
+      const webgl = this._isWebGLBackend();
+      if (!webgl) {
+        this._renderVisibility(options.depthTexture || null);
+        this._renderGhosts(sunState.cameraDirection, sunState.angularRadius);
+        this._renderDiffraction();
+        this._renderVeil();
+      }
 
-      this.quadMesh.material = this.compositeMaterial;
       renderer.setRenderTarget(options.outputTarget || null);
-      renderer.render(this.quadScene, this.quadCamera);
+      const overlay = webgl ? this.simpleCompositeMaterial : this.compositeMaterial;
+      this.quadMesh.material = overlay || this.blitMaterial;
+      try {
+        renderer.render(this.quadScene, this.quadCamera);
+      } catch (drawError) {
+        if (!this.blitMaterial) throw drawError;
+        this.quadMesh.material = this.blitMaterial;
+        renderer.render(this.quadScene, this.quadCamera);
+      }
       this._releaseStaticCpuData();
       return true;
     } finally {
@@ -1298,6 +1371,8 @@ export class SolarFlarePipeline {
     this.diffractionMaterial.dispose();
     this.veilMaterial.dispose();
     this.compositeMaterial.dispose();
+    this.blitMaterial?.dispose();
+    this.simpleCompositeMaterial?.dispose();
     this.rtGhost.dispose();
     this.rtDiffraction.dispose();
     this.rtVeil.dispose();
@@ -1305,6 +1380,7 @@ export class SolarFlarePipeline {
     this.rtVisibilityA.dispose();
     this.rtVisibilityB.dispose();
     this._placeholderDepth.dispose();
+    this._placeholderColor.dispose();
     this._ghostWeightsTexture.dispose();
     releaseDiffractionPsf(this._psf);
     this.quadMesh.geometry.dispose();

@@ -153,6 +153,46 @@ aperture energy while widening the pattern.
 application's scene-relative HDR radiance convention. It does not alter path
 positions, dispersion, aperture clipping, or the ranking of reflection paths.
 
+## Backend support
+
+The full optical model targets WebGPU. Since 0.9.0 the pass also survives the
+`WebGPURenderer` WebGL2 fallback (`tsl_gl`) and iOS Safari, where several of the
+constructs the model relies on are unavailable or silently broken.
+
+Portability changes that apply on **every** backend, with no visual difference
+on WebGPU:
+
+- Ghost instancing carries a dummy `instanceId` instanced attribute. WebGL
+  ignores `instanceCount` unless at least one instanced attribute is present;
+  TSL still reads `instanceIndex` from the draw call.
+- The spectral weights texture is padded to 32 texels (256-byte rows). A 3-wide
+  `rgba16float` row is 24 bytes, which Safari rejects even at height 1.
+- The visibility target is `RGBA16F`, not `R16F`. iOS WebGL2 cannot render to
+  `R16F` — the FBO is incomplete and the clear/draw lands on the canvas as a
+  black rectangle. Visibility only reads `.r`, so the value is identical.
+- The source placeholder is a 1×1 color `DataTexture`, not the depth texture.
+  TSL locks a node's sampler type at first compile, and a `DepthTexture` there
+  made the plate sample 0.
+- Atlas and ghost-weight fetches use `texture()` at nearest-sampled texel
+  centers instead of `textureLoad()`. iOS Safari rejects `texelFetch` in the
+  vertex stage, which is where ghost positions are read. The fetch is the same.
+- Binding a new input rebuilds the composite materials instead of assigning
+  `_sourceNode.value`. WebGL cannot swap a `texture()` node's value after
+  compile; it keeps the placeholder and the plate goes black.
+
+On WebGL2 the pass then runs a **reduced path**: the visibility, ghost,
+diffraction, and veil targets are skipped, and the composite is the source plate
+plus the analytic two-lobe glare halo, modulated by the same hood acceptance,
+source radiance, total strength, and glare strength uniforms as the full model.
+The complete ghost/PSF composite exceeds what that backend compiles reliably,
+and a failed draw leaves the output target black. If the overlay draw throws
+anyway, the pass falls back to a plain blit of the input, so the frame is never
+lost.
+
+Backend detection is `renderer.backend.isWebGLBackend`, **or** an
+`iPhone|iPod|iPad` user-agent match. The UA clause means iOS devices take the
+reduced path even when they are running WebGPU.
+
 ## Accuracy boundary
 
 The optical geometry is traced from a real historical prescription, and the
