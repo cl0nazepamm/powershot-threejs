@@ -824,6 +824,64 @@ INFRARED_PRESETS.gen3_white_phosphor_nir = {
   glow_threshold: 0.34,
 };
 
+// Active-NIR video-oculography camera. Unlike the Gen-3 profiles this is a
+// direct monochrome sensor looking at an eye illuminated by camera-adjacent IR
+// LEDs: no image-intensifier phosphor tint, MCP fixed pattern, scintillation,
+// autogating, or persistence. A small optical PSF and restrained sensor noise
+// retain the soft raw-video character and clipped corneal LED reflections.
+INFRARED_PRESETS.oculography = {
+  ...INFRARED_PRESETS.white_phosphor_nir,
+  name: "Oculography",
+  profile: "raw_vog",
+  input_mode: "nir",
+  halo_disc: false,
+  sensor_resolution: [640, 480],
+  exposure: 0.0,
+  input_gamma: 0.92,
+  nir_input: 1.0,
+  flux_scale: 1.0,
+  photocathode_gamma: 1.0,
+  ebi: 0.0015,
+  middle_grey: 0.18,
+  local_gain: 0.0,
+  min_gain: 1.0,
+  max_gain: 1.0,
+  abc_attack: 0.08,
+  abc_recover: 0.08,
+  abc_min: 1.0,
+  abc_max: 1.0,
+  autogate_strength: 0.0,
+  gain: 1.0,
+  max_output: 1.0,
+  glow_threshold: 0.72,
+  glow_softness: 0.12,
+  glow_strength: 0.10,
+  glow_radius: 0.90,
+  glow_saturate: 1.0,
+  psf_sigma: 0.68,
+  edge_resolution_falloff: 0.12,
+  chicken_amp: 0.0,
+  noise_amount: 0.14,
+  scint_density: 0.0,
+  scint_gain: 0.0,
+  scint_dark_boost: 0.0,
+  scint_bright_floor: 0.0,
+  shot_strength: 0.012,
+  scint_floor: 0.0,
+  phosphor_chroma: [1.0, 1.0, 1.0],
+  highlight_white: [1.0, 1.0, 1.0],
+  screen_black: 0.002,
+  screen_gain: 1.35,
+  screen_shoulder: 1.08,
+  phosphor_gamma: 0.96,
+  highlight_desat: 0.0,
+  bloom_start: 0.82,
+  bloom_range: 0.18,
+  vignette: 0.08,
+  hotspot: 0.015,
+  persistence: 0.0,
+};
+
 export const INFRARED_PRESET_KEYS = Object.keys(INFRARED_PRESETS);
 
 export function applyInfraredPreset(ctx, preset) {

@@ -65,6 +65,7 @@ The pipeline is internally sized for a tube-resolution look (~1280x960); larger 
 RGB images do not contain actual infrared reflectance, so the default path is an artistic pseudo-NIR approximation. When you have real IR source material:
 
 - `infrared.setInputMode("nir")` - the source is a linear monochrome NIR or relative-photocathode-response signal in the red channel (e.g. a spectral renderer's NIR output); read raw, no decode, no RGB heuristic. Calibrate with `infrared.ctx.P.fluxScale.value` and start from the `white_phosphor_nir` preset. The input contract is a single-channel LINEAR texture with no tone mapping or sRGB encode. The included preset is visually calibrated, not an absolute electron-count model.
+- `oculography` - neutral 640x480 active-NIR video-oculography: fixed gain, mild optical softness/noise and LED-reflection bloom, with image-intensifier tint, chicken-wire, scintillation, autogating, and persistence disabled.
 - `infrared.setElectronModel({ electronsPerUnit: 1024 })` - opt into input-referred photoelectron shot noise. `electronsPerUnit` maps relative signal `1.0` to an expected count; the existing `ebi` value supplies the independently sampled dark background. Call `setElectronModel(false)` to restore the original path. It is disabled by default and does not alter Speedball GI.
 
 ## NightShot
