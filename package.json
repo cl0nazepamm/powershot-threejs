@@ -67,8 +67,8 @@
     "prepublishOnly": "npm run check && npm test"
   },
   "devDependencies": {
-    "speedball-gi": "^0.6.6",
-    "three": "^0.185.0",
+    "speedball-gi": "^0.8.0",
+    "three": "0.186.0",
     "three-mesh-bvh": "^0.9.13",
     "vite": "^8.1.5"
   },
