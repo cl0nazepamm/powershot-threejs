@@ -30,6 +30,16 @@ function tapPx(tex, uvN, texel, dx, dy) {
   return texture(tex, uvN.add(texel.mul(vec2(dx, dy))));
 }
 
+// Read a stage input as RGB. Bayer-domain stages can ping-pong through the
+// single-channel grey targets, and since three r186 texture() on a RedFormat
+// texture is typed float, not vec4: `.rgb` on it stays a float, so a following
+// `.r` generates `f32.x`, which WGSL and GLSL ES reject (the whole digital
+// pass renders black). Splat the replicated grey explicitly instead.
+function sampleRGB(tex, uvN = screenUV) {
+  const sample = texture(tex, uvN);
+  return tex.format === THREE.RedFormat ? vec3(sample.r) : sample.rgb;
+}
+
 // Dave Hoskins hashes — good distribution with NO large-argument sin (the
 // classic fract(sin(dot)) hash degenerates into grid/diagonal patterns once
 // pixel coordinates get into the hundreds, which reads as "horrible" grain).
@@ -234,7 +244,7 @@ function mosaicColor(c, ctx) {
 }
 
 function stWhiteBalance(tex, ctx) {
-  return whiteBalanceColor(texture(tex, screenUV).rgb, ctx);
+  return whiteBalanceColor(sampleRGB(tex), ctx);
 }
 
 function whiteBalanceColor(c, ctx) {
@@ -247,7 +257,7 @@ function whiteBalanceColor(c, ctx) {
 }
 
 function stBlackLevel(tex, ctx) {
-  return blackLevelColor(texture(tex, screenUV).rgb, ctx);
+  return blackLevelColor(sampleRGB(tex), ctx);
 }
 
 function blackLevelColor(c, ctx) {
@@ -279,7 +289,7 @@ function samePhase3x3(tex, ctx) {
 }
 
 function stBayerNoise(tex, ctx) {
-  return bayerNoiseColor(texture(tex, screenUV).rgb, ctx);
+  return bayerNoiseColor(sampleRGB(tex), ctx);
 }
 
 function bayerNoiseColor(c, ctx) {
@@ -521,7 +531,7 @@ function vignetteColor(c, ctx) {
 }
 
 function stDigitalPointStack(tex, ctx, ids) {
-  let c = texture(tex, screenUV).rgb;
+  const c = sampleRGB(tex);
   return digitalPointStackColor(c, ctx, ids);
 }
 
