@@ -40,11 +40,14 @@ src/pipeline.js           TSL stage library + ping-pong runner (the big one)
 src/presets.js            named looks (kodak_500t, kodak_200t, …)
 src/film.js               film emulation stages
 src/infrared.js           NIR / thermal
+src/nir_band.js           three-band raster NIR (band integrals, band LUT nodes)
+src/nir_spectral.js       JH upsampler, photocathode band, classifyNir
+src/srgb_lut.js           JH coefficient LUT (generated, loaded on demand)
 src/nightshot.js          low-light
 src/render-pipeline.js    render-pipeline integration
 src/solar-flare*.js       flare model + PSF + optics profile
 src/assets/               heliar-tronnier-100mm-v1.bin (flare PSF, ~2.6 MB)
-tools/                    solar-flare optics + atlas generators
+tools/                    solar-flare optics + atlas generators, spectral LUT generator
 docs/                     SOLAR_FLARES.md, ADVANCED.md
 index.html, flare.html, nv.html   local demos (vite)
 ```
