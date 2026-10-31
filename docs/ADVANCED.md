@@ -66,7 +66,19 @@ RGB images do not contain actual infrared reflectance, so the default path is an
 
 - `infrared.setInputMode("nir")` - the source is a linear monochrome NIR or relative-photocathode-response signal in the red channel (e.g. a spectral renderer's NIR output); read raw, no decode, no RGB heuristic. Calibrate with `infrared.ctx.P.fluxScale.value` and start from the `white_phosphor_nir` preset. The input contract is a single-channel LINEAR texture with no tone mapping or sRGB encode. The included preset is visually calibrated, not an absolute electron-count model.
 - `oculography` - neutral 640x480 active-NIR video-oculography: fixed gain, mild optical softness/noise and LED-reflection bloom, with image-intensifier tint, chicken-wire, scintillation, autogating, and persistence disabled.
-- `infrared.setElectronModel({ electronsPerUnit: 1024 })` - opt into input-referred photoelectron shot noise. `electronsPerUnit` maps relative signal `1.0` to an expected count; the existing `ebi` value supplies the independently sampled dark background. Call `setElectronModel(false)` to restore the original path. It is disabled by default and does not alter Speedball GI.
+- `infrared.setElectronModel({ electronsPerUnit: 1024 })` - opt into input-referred photoelectron shot noise. `electronsPerUnit` maps relative signal `1.0` to an expected count; the existing `ebi` value supplies the independently sampled dark background. Call `setElectronModel(false)` to restore the original path. It is disabled by default.
+
+### NIR band from a raster render
+
+`createNirBand()` (from `powershot-threejs/infrared`) produces that linear response with Three's ordinary raster lighting - no spectral renderer. It resolves once the Jakob-Hanika sRGB-to-reflectance LUT has loaded (`loadSpectralLut()`, about 0.9 MB, fetched on first use only).
+
+- `band.reflectanceBands(material)` / `band.emissiveBands(material)` / `band.lightBands(light)` - three NIR band values (550-650, 650-800, 800-900 nm) for a material's colour, emission and a light. Write them into RGB for a render pass: Three multiplies material and emitter per band, keeping their spectral correlation.
+- `band.weights` - photocathode band weights; `dot(bands, weights)` collapses the lit bands to the relative response for `setInputMode("nir")`.
+- Material NIR truth: `userData.nirAlbedo` (0-1) wins; otherwise `classifyNir()` tags foliage, water, asphalt and skin from name and colour; otherwise the JH upsampler extrapolates the RGB spectrum past 720 nm.
+- Light spectra follow `userData.emitterClass`: `incandescent` (Planck tail, `userData.colorTemp` K), `led` (no NIR), `sodium` (589 nm line), `ir` (850 nm illuminator, black in RGB).
+- Spectral renderers can share the model: `photocathodeS()` / `buildPhotocathodeSampler()` define the NV band, `createJhUpsampler(createSpectralLutTextures(lut), lut.res)` evaluates the upsampler in TSL at a hero wavelength.
+
+`nv.html` shows the full path: band materials and lights, one render, one collapse pass, then the tube.
 
 ## NightShot
 
@@ -141,13 +153,17 @@ renderPipeline.outputNode = effectPass(scenePass, {
 - `src/infrared.js` - reusable pseudo-NIR night-vision pipeline and presets.
 - `src/nightshot.js` - Sony NightShot camcorder emulation composing the NIR sensor with the analog tape path.
 - `src/render-pipeline.js` - RenderPipeline output-node adapters for PowerShot effects.
-- `nv.html` + `src/nv-demo.js` - spectral NIR night-vision demo: the speedball-gi
-  spectral tracer (NV mode) renders a linear relative photocathode response that feeds
+- `nv.html` + `src/nv-demo.js` - NIR night-vision demo: a three-band NIR raster
+  render collapses to a linear relative photocathode response that feeds
   `setInputMode("nir")` - no RGB heuristic anywhere. The tube enables the opt-in
   relative-electron model; press `E` to compare it with the original noise path.
-- `src/nir_band.js` - realtime three-band raster approximation of the tracer's
-  direct term. Material and emitter spectra stay separate until Three performs
-  component-wise lighting, then the bands collapse through photocathode weights.
+- `src/nir_band.js` - realtime three-band raster NIR. Material and emitter spectra
+  stay separate until Three performs component-wise lighting, then the bands
+  collapse through photocathode weights.
+- `src/nir_spectral.js` - the spectral model under it: photocathode response,
+  NIR classifier, and the Jakob-Hanika upsampler (CPU and TSL) over
+  `src/srgb_lut.js`, which `tools/gen-spectral-lut.mjs` regenerates
+  (`npm run generate:spectral-lut`).
 - `src/presets.js` - camera preset values.
 - `src/styles.css` - app UI styles.
 - `public/logo.png` - PowerSHOT logo.

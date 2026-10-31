@@ -1421,3 +1421,25 @@ export class InfraredPipeline {
     this.mesh.geometry.dispose();
   }
 }
+
+// NIR band model (nir_band.js over nir_spectral.js): a scene's
+// photocathode-weighted response from Three's raster lighting, ready for
+// setInputMode("nir") - no spectral renderer needed.
+export {
+  NIR_BAND_RANGES,
+  NIR_BAND_WEIGHTS,
+  createNirBand,
+} from "./nir_band.js";
+
+export {
+  NV_LAMBDA_MAX,
+  NV_LAMBDA_MIN,
+  buildPhotocathodeSampler,
+  classifyNir,
+  createJhEvaluator,
+  createJhUpsampler,
+  createSpectralLutTextures,
+  loadSpectralLut,
+  photocathodeResponseJS,
+  photocathodeS,
+} from "./nir_spectral.js";

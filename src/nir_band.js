@@ -12,10 +12,9 @@
 // single-scalar path discarded.
 
 import {
-  photocathodeResponseJS, NV_LAMBDA_MIN, NV_LAMBDA_MAX,
-} from "speedball-gi/spectral-traverse";
-import { classifyNir } from "speedball-gi/spectral-scene";
-import { decodeSpectralLut, SPECTRAL_LUT_RES } from "speedball-gi/srgb-lut";
+  NV_LAMBDA_MAX, NV_LAMBDA_MIN, classifyNir, createJhEvaluator, loadSpectralLut,
+  photocathodeResponseJS,
+} from "./nir_spectral.js";
 
 const L0 = NV_LAMBDA_MIN;
 const L1 = NV_LAMBDA_MAX;
@@ -27,10 +26,6 @@ export const NIR_BAND_RANGES = Object.freeze([
   Object.freeze([650, 800]),
   Object.freeze([800, L1]),
 ]);
-
-// visible anchor for JH normalization (matches spectral_traverse jhEval)
-const JH_MIN = 380.0;
-const JH_RANGE = 340.0;
 
 function smoothstep(e0, e1, x) {
   const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
@@ -70,77 +65,7 @@ function integrateBands(f) {
   return NIR_BAND_RANGES.map(([from, to]) => weightedRange(f, from, to));
 }
 
-// ── CPU mirror of the GPU Jakob–Hanika evaluation ───────────────────
-// Same LUT the kernel samples (decodeSpectralLut: 3 argmax slabs packed in
-// depth, RGBA float, coeffs in xyz), same trilinear fetch, same unclamped-Ln
-// sigmoid so the CPU scalar matches the converged GPU spectrum.
-function makeJh() {
-  let data = null;
-  const res = SPECTRAL_LUT_RES;
-  try { data = decodeSpectralLut(); } catch { data = null; }
-
-  const fetchTri = (slab, x, y, z) => {
-    // x,y,z in [0,1] grid space → trilinear over res³ within the slab
-    const c = [x, y, z].map((v) => Math.min(1, Math.max(0, v)) * (res - 1));
-    const i0 = c.map(Math.floor);
-    const fr = c.map((v, k) => v - i0[k]);
-    const i1 = i0.map((v) => Math.min(v + 1, res - 1));
-    const at = (xi, yi, zi) => (((slab * res + zi) * res + yi) * res + xi) * 4;
-    const out = [0, 0, 0];
-    for (let k = 0; k < 3; k += 1) {
-      const c00 = data[at(i0[0], i0[1], i0[2]) + k] * (1 - fr[0]) + data[at(i1[0], i0[1], i0[2]) + k] * fr[0];
-      const c10 = data[at(i0[0], i1[1], i0[2]) + k] * (1 - fr[0]) + data[at(i1[0], i1[1], i0[2]) + k] * fr[0];
-      const c01 = data[at(i0[0], i0[1], i1[2]) + k] * (1 - fr[0]) + data[at(i1[0], i0[1], i1[2]) + k] * fr[0];
-      const c11 = data[at(i0[0], i1[1], i1[2]) + k] * (1 - fr[0]) + data[at(i1[0], i1[1], i1[2]) + k] * fr[0];
-      const c0 = c00 * (1 - fr[1]) + c10 * fr[1];
-      const c1 = c01 * (1 - fr[1]) + c11 * fr[1];
-      out[k] = c0 * (1 - fr[2]) + c1 * fr[2];
-    }
-    return out;
-  };
-
-  const coeffs = (r, g, b) => {
-    // slab/axis selection mirrors jhCoeffs in spectral_traverse.js
-    let slab, a, c, z;
-    if (b >= g && b >= r) { slab = 2; a = r; c = g; z = b; }
-    else if (g >= r) { slab = 1; a = b; c = r; z = g; }
-    else { slab = 0; a = g; c = b; z = r; }
-    const zc = Math.max(z, 1e-4);
-    return fetchTri(slab, a / zc, c / zc, Math.min(1, Math.max(0, z)));
-  };
-
-  const evalAt = (co, l) => {
-    const Ln = Math.max((l - JH_MIN) / JH_RANGE, 0); // unclamped above 1 → NIR extrapolation
-    const x = (co[0] * Ln + co[1]) * Ln + co[2];
-    return Math.min(1, Math.max(0, 0.5 + (0.5 * x) / Math.sqrt(x * x + 1)));
-  };
-
-  // no-LUT fallback: 3-bin tent (rgbToSpectral) — past 720 it holds the red value
-  const tent = (r, g, b, l) => {
-    const t = Math.min(1, Math.max(0, (l - JH_MIN) / JH_RANGE));
-    return t < 0.5 ? b + (g - b) * Math.min(1, t * 2) : g + (r - g) * Math.min(1, (t - 0.5) * 2);
-  };
-
-  return {
-    reflectanceAt(r, g, b, l) {
-      const rc = Math.min(1, Math.max(0, r));
-      const gc = Math.min(1, Math.max(0, g));
-      const bc = Math.min(1, Math.max(0, b));
-      if (!data) return tent(rc, gc, bc, l);
-      const co = coeffs(rc, gc, bc);
-      return evalAt(co, l);
-    },
-    // JH shape times the unbounded linear RGB magnitude.
-    emissionAt(r, g, b, l) {
-      const m = Math.max(r, g, b);
-      if (m <= 0) return 0;
-      if (!data) return m * tent(r / m, g / m, b / m, l);
-      return m * evalAt(coeffs(r / m, g / m, b / m), l);
-    },
-  };
-}
-
-// ── per-light collapse (mirrors emitterAtLambda classes exactly) ────
+// ── per-light collapse (the spectral emitter classes) ──────────────
 const C2 = 1.4388e7; // nm·K
 const SODIUM_Y_SCALE = 13.77;
 
@@ -165,8 +90,10 @@ function emitterClassOf(light) {
   return 0;
 }
 
-export function createNirBand() {
-  const jh = makeJh();
+// Resolves once the JH coefficient LUT has loaded (loadSpectralLut); if it
+// cannot load, reflectance falls back to the 3-bin tent.
+export async function createNirBand() {
+  const jh = createJhEvaluator(await loadSpectralLut().catch(() => null));
 
   const collapse = (values) => values.reduce(
     (sum, value, i) => sum + value * NIR_BAND_WEIGHTS[i], 0,
@@ -178,8 +105,8 @@ export function createNirBand() {
     collapse,
 
     // Per-band reflectance. Authored/classified NIR truth is blended across
-    // 700..740 nm exactly like speedball's path tracer; visible-red response
-    // below that edge remains the JH reconstruction.
+    // 700..740 nm exactly like createJhUpsampler's reflectance; visible-red
+    // response below that edge remains the JH reconstruction.
     reflectanceBands(material) {
       const ud = material.userData?.nirAlbedo;
       const c = material.color;
@@ -205,9 +132,8 @@ export function createNirBand() {
       return integrateBands((l) => jh.emissionAt(e.r * k, e.g * k, e.b * k, l));
     },
 
-    // Per-band relative radiance, including light intensity. The emitter
-    // functions mirror speedball's GPU path; no absolute radiometric units are
-    // implied by Three's light intensity.
+    // Per-band relative radiance, including light intensity. No absolute
+    // radiometric units are implied by Three's light intensity.
     lightBands(light) {
       const k = Number.isFinite(light.intensity) ? light.intensity : 1;
       if (k <= 0) return [0, 0, 0];

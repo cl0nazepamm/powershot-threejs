@@ -28,7 +28,12 @@ export {
   InfraredPipeline,
   applyInfraredProfile,
   applyInfraredPreset,
+  classifyNir,
+  createNirBand,
+  loadSpectralLut,
   makeInfraredUniforms,
+  NIR_BAND_RANGES,
+  NIR_BAND_WEIGHTS,
 } from "./infrared.js";
 
 export {
