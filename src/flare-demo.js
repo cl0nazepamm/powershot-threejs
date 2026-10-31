@@ -164,7 +164,7 @@ async function init() {
   renderer.toneMappingExposure = 0.72;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   await renderer.init();
 
   buildScene();

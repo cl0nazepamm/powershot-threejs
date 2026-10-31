@@ -238,7 +238,7 @@ async function init() {
   // for the 3D scene sources; the effect quad passes carry no lights, so the
   // file paths render exactly as before
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   await renderer.init();
 
   pipeline = new Pipeline(renderer);
