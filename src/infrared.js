@@ -197,14 +197,19 @@ function softNir(nirTex, ctx, uv) {
 // One intensity-invariant chroma multiply; only the brightest blooming cores
 // desaturate toward white (eye/sensor clip). White phosphor is a cool
 // near-neutral, NOT pure (1,1,1).
-function phosphorMap(L, ctx) {
+function phosphorMap(L, ctx, diffuseBloom = false) {
   const P = ctx.P;
   let screen = L.sub(P.screenBlack).max(0.0);
   screen = screen.mul(P.screenGain);
   screen = screen.div(screen.add(P.screenShoulder)).mul(P.screenShoulder.add(1.0));
   screen = screen.max(0.0).pow(P.phosphorGamma);
 
-  const base = P.phosphorChroma.mul(screen);
+  // Artistic split toning stays multiplicative: unexposed pixels stay black.
+  // Kept out of the legacy tube graph altogether when diffusion is disabled.
+  const chroma = diffuseBloom
+    ? mix(P.shadowChroma, P.phosphorChroma, smoothstep(0.015, 0.38, screen))
+    : P.phosphorChroma;
+  const base = chroma.mul(screen);
   const white = P.highlightWhite.mul(min(screen, float(1.0)));
   const s = smoothstep(P.bloomStart, P.bloomStart.add(P.bloomRange), screen)
     .mul(P.highlightDesat);
@@ -298,7 +303,7 @@ function infraredOutputAlpha(sourceSample, effectColor) {
   return sourceAlpha.add(effectAlpha.mul(sourceAlpha.oneMinus())).clamp(0.0, 1.0);
 }
 
-function stAnalysis(nirTex, ctx) {
+function stAnalysis(nirTex, ctx, diffuseBloom = false) {
   const nir = texture(nirTex, screenUV).r;
   const glowMask = smoothstep(
     ctx.P.glowThreshold,
@@ -311,14 +316,14 @@ function stAnalysis(nirTex, ctx) {
   // brightness instead, and true-NIR inputs (unclamped Planck-tail sources)
   // would nuke the whole frame.
   const glowSource = min(nir.mul(glowMask), ctx.P.glowSaturate);
-  return vec4(nir, glowSource, 0.0, 1.0);
+  return vec4(nir, glowSource, diffuseBloom ? glowSource : float(0.0), 1.0);
 }
 
 // Two-pass analysis blur. The adaptation mean (r) always uses the separable
 // gaussian. The glow channels (g, b) optionally use a 13-tap Vogel-disc kernel
 // per pass (rotated differently each pass) - a flatter, more disc-like halo
 // profile than a gaussian, closer to the fixed angular spread of a real tube.
-function stAnalysisBlur(tex, ctx, dx, dy, disc) {
+function stAnalysisBlur(tex, ctx, dx, dy, disc, diffuseBloom = false) {
   const sigma = 2.55;
   let sum = vec3(0.0);
   let wsum = 0.0;
@@ -329,7 +334,26 @@ function stAnalysisBlur(tex, ctx, dx, dy, disc) {
     wsum += w;
   }
   const gauss = sum.div(wsum);
-  if (!disc) return vec4(gauss, 1.0);
+  // The unused blue analysis channel carries a second, wider Gaussian lobe.
+  // Reuses the same quarter-resolution targets and two passes; no extra RTs.
+  let diffusion = gauss.b;
+  if (diffuseBloom) {
+    let broad = float(0.0);
+    let broadWeight = 0.0;
+    const scale = min(ctx.resolution.x, ctx.resolution.y).div(TUBE_REFERENCE_MIN_DIM);
+    // Dense taps prevent compact highlights from printing a sparse grid into
+    // the wide halo. Only the creative profile pays for this quarter-res work.
+    for (let i = -24; i <= 24; i += 1) {
+      const position = i * 0.25;
+      const w = Math.exp(-(position * position) / (2.0 * sigma * sigma));
+      const off = ctx.analysisTexel.mul(vec2(dx, dy))
+        .mul(ctx.P.glowRadius.mul(ctx.P.diffusionRadius).mul(scale).mul(position));
+      broad = broad.add(texture(tex, screenUV.add(off)).b.mul(w));
+      broadWeight += w;
+    }
+    diffusion = broad.div(broadWeight);
+  }
+  if (!disc) return vec4(gauss.r, gauss.g, diffusion, 1.0);
 
   const rot = dy === 0 ? 0.0 : GOLDEN_ANGLE * 0.5; // decorrelate the two passes
   // Rotate the whole rosette per texel: with a fixed orientation the sparse
@@ -349,7 +373,7 @@ function stAnalysisBlur(tex, ctx, dx, dy, disc) {
       .mul(ctx.P.glowRadius.mul(r));
     glow = glow.add(texture(tex, screenUV.add(off)).gb.mul(1 / taps));
   }
-  return vec4(gauss.r, glow.x, glow.y, 1.0);
+  return vec4(gauss.r, glow.x, diffuseBloom ? diffusion : glow.y, 1.0);
 }
 
 // --- Stage 3b: temporal ABC (gain breathing) --------------------------------
@@ -412,7 +436,7 @@ function stAbcUpdate(analysisTex, gainPrevTex, ctx) {
 
 function stDevelop(
   srcTex, nirTex, ctx, analysisTex, abcGainTex,
-  stages, outputEncoding, electronModel,
+  stages, outputEncoding, electronModel, diffuseBloom = false,
 ) {
   const P = ctx.P;
   const sourceSample = texture(srcTex, screenUV);
@@ -487,7 +511,15 @@ function stDevelop(
   // linear output feeds a post stack that encodes at its own output stage.
   // The post-effect grade lands here, on the linear phosphor colour — after
   // AGC/ABC so the punch survives the tube's own normalisation.
-  const phosphor = powershotLinearGrade(phosphorMap(signal.clamp(0.0, 1.35), ctx), ctx);
+  let screen = phosphorMap(signal.clamp(0.0, 1.35), ctx, diffuseBloom);
+  if (diffuseBloom && stages.glow) {
+    // Coloured air around bright edges, with headroom preserved in pearl cores.
+    // Tied to the existing glow control, so zero removes both bloom lobes.
+    const veil = analysis.b.mul(P.glowStrength).mul(P.diffusionStrength);
+    screen = screen.add(P.diffusionChroma.mul(veil)
+      .mul(vec3(1.0).sub(screen.clamp(0.0, 1.0))));
+  }
+  const phosphor = powershotLinearGrade(screen, ctx);
   if (outputEncoding === "linear") {
     const effectColor = phosphor.max(0.0);
     const finalColor = mix(sourceSample.rgb, effectColor, ctx.power).max(0.0);
@@ -566,6 +598,9 @@ export function makeInfraredUniforms() {
       glowStrength: uniform(0.45),
       glowRadius: uniform(1.45),
       glowSaturate: uniform(1.5),
+      diffusionRadius: uniform(3.6),
+      diffusionStrength: uniform(0.0),
+      diffusionChroma: uniform(new THREE.Vector3(0.38, 0.28, 1.0)),
 
 
       // resolution-limited optics
@@ -592,6 +627,7 @@ export function makeInfraredUniforms() {
 
       // phosphor screen
       phosphorChroma: uniform(new THREE.Vector3(0.92, 0.96, 1.00)),
+      shadowChroma: uniform(new THREE.Vector3(0.92, 0.96, 1.00)),
       highlightWhite: uniform(new THREE.Vector3(1.00, 1.00, 1.00)),
       screenBlack: uniform(0.004),
       screenGain: uniform(1.08),
@@ -882,6 +918,72 @@ INFRARED_PRESETS.oculography = {
   persistence: 0.0,
 };
 
+// Reference-inspired creative profile: obsidian blacks, lilac body tones,
+// icy pearl cores and a broad violet diffusion halo. Fixed global gain keeps
+// dark compositions dark instead of letting ABC expose the background up.
+INFRARED_PRESETS.aura = {
+  ...INFRARED_PRESETS.white_phosphor,
+  name: "Aura · Lavender Pearl",
+  profile: "aura",
+  diffuse_bloom: true,
+  sensor_resolution: [1920, 1440],
+  exposure: 0.15,
+  input_gamma: 1.12,
+  nir_input: 0.22,
+  spectral_mix: [0.48, 0.40, 0.12],
+  green_reflectance: 0.28,
+  red_reflectance: 0.12,
+  blue_suppression: 0.025,
+  sky_suppress: 0.28,
+  water_suppress: 0.18,
+  skin_boost: 0.22,
+  photocathode_gamma: 1.0,
+  ebi: 0.0005,
+  local_gain: 0.0,
+  abc_min: 1.0,
+  abc_max: 1.0,
+  gain: 2.2,
+  max_output: 1.25,
+  glow_threshold: 0.30,
+  glow_softness: 0.28,
+  glow_strength: 0.38,
+  glow_radius: 1.65,
+  glow_saturate: 1.1,
+  diffusion_radius: 3.6,
+  diffusion_strength: 0.85,
+  diffusion_chroma: [0.38, 0.28, 1.0],
+  psf_sigma: 0.62,
+  chicken_amp: 0.0,
+  noise_amount: 0.16,
+  scint_density: 0.002,
+  scint_gain: 0.12,
+  scint_dark_boost: 0.15,
+  scint_bright_floor: 0.10,
+  shot_strength: 0.009,
+  shadow_chroma: [0.28, 0.18, 0.52],
+  phosphor_chroma: [0.64, 0.52, 0.88],
+  highlight_white: [0.88, 0.95, 1.0],
+  screen_black: 0.006,
+  screen_gain: 1.0,
+  screen_shoulder: 2.0,
+  phosphor_gamma: 1.18,
+  highlight_desat: 0.92,
+  bloom_start: 0.30,
+  bloom_range: 0.64,
+  vignette: 0.22,
+  hotspot: 0.025,
+  persistence: 0.20,
+};
+
+// Same art direction for an actual scene-linear NIR-response texture.
+INFRARED_PRESETS.aura_nir = {
+  ...INFRARED_PRESETS.aura,
+  input_mode: "nir",
+  nir_input: 1.0,
+  exposure: 0.0,
+  flux_scale: 1.0,
+};
+
 export const INFRARED_PRESET_KEYS = Object.keys(INFRARED_PRESETS);
 
 export function applyInfraredPreset(ctx, preset) {
@@ -917,6 +1019,9 @@ export function applyInfraredPreset(ctx, preset) {
   P.glowStrength.value = preset.glow_strength;
   P.glowRadius.value = preset.glow_radius;
   P.glowSaturate.value = preset.glow_saturate ?? 1.5;
+  P.diffusionRadius.value = preset.diffusion_radius ?? 3.6;
+  P.diffusionStrength.value = preset.diffusion_strength ?? 0.0;
+  P.diffusionChroma.value.set(...(preset.diffusion_chroma ?? [0.38, 0.28, 1.0]));
   P.psfSigma.value = preset.psf_sigma;
   P.edgeResolutionFalloff.value = preset.edge_resolution_falloff ?? 0.0;
   P.chickenAmp.value = preset.chicken_amp;
@@ -934,6 +1039,7 @@ export function applyInfraredPreset(ctx, preset) {
   P.shotStrength.value = preset.shot_strength;
   P.scintFloor.value = preset.scint_floor;
   P.phosphorChroma.value.set(...preset.phosphor_chroma);
+  P.shadowChroma.value.set(...(preset.shadow_chroma ?? preset.phosphor_chroma));
   P.highlightWhite.value.set(...preset.highlight_white);
   P.screenBlack.value = preset.screen_black ?? 0.004;
   P.screenGain.value = preset.screen_gain ?? 1.08;
@@ -961,6 +1067,7 @@ export function applyInfraredProfile(pipeline, preset) {
     preset.flux_scale ?? 1.0,
   );
   pipeline.setHaloDisc(preset.halo_disc === true);
+  pipeline.setDiffuseBloom(preset.diffuse_bloom === true);
   pipeline.clearHistory();
   return pipeline;
 }
@@ -1017,6 +1124,7 @@ export class InfraredPipeline {
     this.inputEncoding = "srgb";   // decode applied to "rgb" sources
     this.outputEncoding = "srgb";  // "linear" for a handoff into a post stack
     this.haloDisc = false;         // Vogel-disc halo profile (see stAnalysisBlur)
+    this.diffuseBloom = false;     // split-toned screen and broad coloured halo
     this.steps = [];
     this.developMat = null;
     this.abcInitMat = null;
@@ -1160,6 +1268,13 @@ export class InfraredPipeline {
     this.dirty = true;
   }
 
+  setDiffuseBloom(on) {
+    const next = on === true;
+    if (this.diffuseBloom === next) return;
+    this.diffuseBloom = next;
+    this.dirty = true;
+  }
+
   clearHistory() {
     // The phosphor "boil" is stateless (it recomputes prior frames
     // analytically); the only history is the ABC gain state, reset to 1.0.
@@ -1205,15 +1320,15 @@ export class InfraredPipeline {
 
     if (needsAnalysis) {
       this.steps.push({
-        material: this._mat(stAnalysis(this.rtNir.texture, this.ctx)),
+        material: this._mat(stAnalysis(this.rtNir.texture, this.ctx, this.diffuseBloom)),
         target: this.rtAnalysisA,
       });
       this.steps.push({
-        material: this._mat(stAnalysisBlur(this.rtAnalysisA.texture, this.ctx, 1, 0, this.haloDisc)),
+        material: this._mat(stAnalysisBlur(this.rtAnalysisA.texture, this.ctx, 1, 0, this.haloDisc, this.diffuseBloom)),
         target: this.rtAnalysisB,
       });
       this.steps.push({
-        material: this._mat(stAnalysisBlur(this.rtAnalysisB.texture, this.ctx, 0, 1, this.haloDisc)),
+        material: this._mat(stAnalysisBlur(this.rtAnalysisB.texture, this.ctx, 0, 1, this.haloDisc, this.diffuseBloom)),
         target: this.rtAnalysisA,
       });
     }
@@ -1245,6 +1360,7 @@ export class InfraredPipeline {
         stages,
         this.outputEncoding,
         this.electronModel,
+        this.diffuseBloom,
       ),
     );
     this.developMat.transparent = true;

@@ -50,6 +50,7 @@ let electronModelOn = true;
 // imaging device consuming the flux: Gen-3 tube or Sony NightShot camcorder
 let device = "tube";
 let tubeProfileKey = "gen3_white_phosphor_nir";
+const tubeProfileKeys = ["gen3_white_phosphor_nir", "white_phosphor_nir", "aura_nir"];
 let frame = 0, lastT = 0, statusLine = "";
 // realtime three-band raster path (see src/nir_band.js)
 let realtime = true, band = null;
@@ -188,7 +189,7 @@ function hudText() {
       ? `device      ${device === "tube" ? `Gen-3 tube · ${INFRARED_PRESETS[tubeProfileKey].name}` : "Sony NightShot (CCD + tape path)"}   [N]`
       : "",
     mode === "nv" && device === "tube"
-      ? "profile     Silver Blue / Ethereal   [P]"
+      ? "profile     Silver Blue / Ethereal / Aura   [P]"
       : "",
     mode === "nv" && device === "nightshot"
       ? `tape        VHS ${nightshot.cam.ctx.P.analogStrength.value.toFixed(2)} [, .] · noise ${nightshot.cam.ctx.P.analogTapeNoise.value.toFixed(2)} [< >] · smear ${nightshot.ctx.P.smear.value.toFixed(2)} [; ']`
@@ -276,9 +277,7 @@ async function init() {
     if (e.key === "v" || e.key === "V") setMode(mode === "nv" ? "visible" : "nv");
     if (e.key === "n" || e.key === "N") device = device === "tube" ? "nightshot" : "tube";
     if (e.key === "p" || e.key === "P") {
-      tubeProfileKey = tubeProfileKey === "gen3_white_phosphor_nir"
-        ? "white_phosphor_nir"
-        : "gen3_white_phosphor_nir";
+      tubeProfileKey = tubeProfileKeys[(tubeProfileKeys.indexOf(tubeProfileKey) + 1) % tubeProfileKeys.length];
       applyInfraredProfile(infrared, INFRARED_PRESETS[tubeProfileKey]);
     }
     if (e.key === "r" || e.key === "R") realtime = !realtime;

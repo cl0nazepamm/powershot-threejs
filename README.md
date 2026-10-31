@@ -159,6 +159,15 @@ infrared.setPreset("white_phosphor");
 infrared.render(inputTexture);
 ```
 
+For lavender shadows, pearlescent highlights, and soft violet diffusion, use
+`infrared.setPreset("aura")` (**White Phosphor → Aura · Lavender Pearl** in the
+demo). It reuses the infrared optics and halo passes, with restrained grain
+and fixed global gain to preserve deep blacks. Best with a lit subject against
+a dark background; it grades the source rather than adding geometry or text.
+Use `aura_nir` for a real linear NIR-response texture, or `aura` with
+`setInputEncoding("linear")` for an RGB render target. The existing glow control
+adjusts both the tight highlight bloom and its wider coloured halo.
+
 ## NightShot
 
 Sony Handycam "NightShot": a camcorder CCD with the IR-cut filter flipped out — AGC breathing, heavy noise, vertical smear, green monochrome, then the analog tape path.
