@@ -26,6 +26,7 @@ import {
   powershotLinearGrade,
   resolvePreset,
 } from "./pipeline.js";
+import { NIR_BAND_WEIGHTS } from "./nir_band.js";
 
 const LUM709 = vec3(0.2126, 0.7152, 0.0722);
 const TAU = 6.2831853;
@@ -147,14 +148,16 @@ function fluxInputTrim(flux, ctx) {
 // Every later stage reads this texture, so input decode happens exactly here
 // (the spectral heuristic used to be re-evaluated ~7x per pixel: 5 PSF taps +
 // the sharp read + the analysis pass).
-function stNirPrepass(srcTex, ctx, { inputMode, inputEncoding }) {
+function stNirPrepass(srcTex, ctx, { inputMode, inputEncoding, nirBands }) {
   const P = ctx.P;
   if (inputMode === "nir") {
-    // Linear photocathode response (e.g. a spectral tracer's NIR accumulation
-    // channel): a raw single-channel LINEAR read - no sRGB decode, no luma
-    // dot. fluxScale calibrates the renderer's flux range onto the range the
-    // tube presets were tuned for.
-    const flux = texture(srcTex, screenUV).r;
+    // Linear photocathode response (e.g. a spectral renderer's NIR channel):
+    // a raw LINEAR read - no sRGB decode, no luma dot. A three-band NIR raster
+    // (setNirBands) collapses through the photocathode band weights; a
+    // single-channel source is read from red. fluxScale calibrates the
+    // renderer's flux range onto the range the tube presets were tuned for.
+    const src = texture(srcTex, screenUV);
+    const flux = nirBands ? dot(src.rgb, vec3(...NIR_BAND_WEIGHTS)) : src.r;
     return vec4(fluxInputTrim(flux.max(0.0).mul(P.fluxScale), ctx), 0.0, 0.0, 1.0);
   }
   const raw = texture(srcTex, screenUV).rgb;
@@ -1120,6 +1123,8 @@ export class InfraredPipeline {
     // "rgb": simulate NIR from an RGB frame. "nir": the source IS linear
     // photocathode response (single channel) - read raw, no decode, no heuristic.
     this.inputMode = "rgb";
+    // With "nir" input: the source holds three NIR bands in RGB, not one channel.
+    this.nirBands = false;
     this.electronModel = false;  // opt-in; default shaders remain unchanged
     this.inputEncoding = "srgb";   // decode applied to "rgb" sources
     this.outputEncoding = "srgb";  // "linear" for a handoff into a post stack
@@ -1181,6 +1186,16 @@ export class InfraredPipeline {
     if (this.inputMode === next) return;
     this.inputMode = next;
     this.ctx.P.nirInput.value = next === "nir" ? 1 : 0;
+    this.dirty = true;
+  }
+
+  // With setInputMode("nir"): the source carries three NIR bands in RGB (a
+  // createNirBand raster) instead of one linear channel in red, and the prepass
+  // collapses them through NIR_BAND_WEIGHTS. Presets leave this untouched.
+  setNirBands(on) {
+    const next = on === true;
+    if (this.nirBands === next) return;
+    this.nirBands = next;
     this.dirty = true;
   }
 
@@ -1314,6 +1329,7 @@ export class InfraredPipeline {
       material: this._mat(stNirPrepass(this.source, this.ctx, {
         inputMode: this.inputMode,
         inputEncoding: this.inputEncoding,
+        nirBands: this.nirBands,
       })),
       target: this.rtNir,
     });

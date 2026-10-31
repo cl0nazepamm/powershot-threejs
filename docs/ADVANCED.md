@@ -65,6 +65,7 @@ The pipeline is internally sized for a tube-resolution look (~1280x960); larger 
 RGB images do not contain actual infrared reflectance, so the default path is an artistic pseudo-NIR approximation. When you have real IR source material:
 
 - `infrared.setInputMode("nir")` - the source is a linear monochrome NIR or relative-photocathode-response signal in the red channel (e.g. a spectral renderer's NIR output); read raw, no decode, no RGB heuristic. Calibrate with `infrared.ctx.P.fluxScale.value` and start from the `white_phosphor_nir` preset. The input contract is a single-channel LINEAR texture with no tone mapping or sRGB encode. The included preset is visually calibrated, not an absolute electron-count model.
+- `infrared.setNirBands(true)` - with `setInputMode("nir")`, the source is a three-band NIR render (see below) and the prepass collapses it through the photocathode band weights, so no separate collapse pass is needed. `NightshotPipeline.ir` takes the same call.
 - `oculography` - neutral 640x480 active-NIR video-oculography: fixed gain, mild optical softness/noise and LED-reflection bloom, with image-intensifier tint, chicken-wire, scintillation, autogating, and persistence disabled.
 - `infrared.setElectronModel({ electronsPerUnit: 1024 })` - opt into input-referred photoelectron shot noise. `electronsPerUnit` maps relative signal `1.0` to an expected count; the existing `ebi` value supplies the independently sampled dark background. Call `setElectronModel(false)` to restore the original path. It is disabled by default.
 
@@ -73,12 +74,14 @@ RGB images do not contain actual infrared reflectance, so the default path is an
 `createNirBand()` (from `powershot-threejs/infrared`) produces that linear response with Three's ordinary raster lighting - no spectral renderer. It resolves once the Jakob-Hanika sRGB-to-reflectance LUT has loaded (`loadSpectralLut()`, about 0.9 MB, fetched on first use only).
 
 - `band.reflectanceBands(material)` / `band.emissiveBands(material)` / `band.lightBands(light)` - three NIR band values (550-650, 650-800, 800-900 nm) for a material's colour, emission and a light. Write them into RGB for a render pass: Three multiplies material and emitter per band, keeping their spectral correlation.
-- `band.weights` - photocathode band weights; `dot(bands, weights)` collapses the lit bands to the relative response for `setInputMode("nir")`.
+- `band.colorBands(r, g, b)` - the bands of a plain linear RGB colour; `band.redEdge` - each band's share past the 700-740 nm red edge, where an authored NIR level takes over from the colour.
+- `band.createRasterNodes({ size = 32 })` - per-texel conversion for node materials: a half-float RGB-to-bands 3D LUT with TSL helpers `reflectance(rgb)`, `emission(rgb)` and `tagged(rgb, nirAlbedo, flatBands)` (keeps a texture's variation under a material's `nirAlbedo`; a negative level means untagged). `dispose()` releases the LUT.
+- `band.weights` - photocathode band weights; `dot(bands, weights)` collapses the lit bands to the relative response for `setInputMode("nir")`, as `setNirBands(true)` does in the tube.
 - Material NIR truth: `userData.nirAlbedo` (0-1) wins; otherwise `classifyNir()` tags foliage, water, asphalt and skin from name and colour; otherwise the JH upsampler extrapolates the RGB spectrum past 720 nm.
 - Light spectra follow `userData.emitterClass`: `incandescent` (Planck tail, `userData.colorTemp` K), `led` (no NIR), `sodium` (589 nm line), `ir` (850 nm illuminator, black in RGB).
 - Spectral renderers can share the model: `photocathodeS()` / `buildPhotocathodeSampler()` define the NV band, `createJhUpsampler(createSpectralLutTextures(lut), lut.res)` evaluates the upsampler in TSL at a hero wavelength.
 
-`nv.html` shows the full path: band materials and lights, one render, one collapse pass, then the tube.
+`nv.html` shows the full path: band materials and lights, one render, then the tube collapses the bands (`setNirBands`).
 
 ## NightShot
 
@@ -154,8 +157,8 @@ renderPipeline.outputNode = effectPass(scenePass, {
 - `src/nightshot.js` - Sony NightShot camcorder emulation composing the NIR sensor with the analog tape path.
 - `src/render-pipeline.js` - RenderPipeline output-node adapters for PowerShot effects.
 - `nv.html` + `src/nv-demo.js` - NIR night-vision demo: a three-band NIR raster
-  render collapses to a linear relative photocathode response that feeds
-  `setInputMode("nir")` - no RGB heuristic anywhere. The tube enables the opt-in
+  render that the tube collapses to a linear relative photocathode response
+  (`setInputMode("nir")` + `setNirBands`) - no RGB heuristic anywhere. The tube enables the opt-in
   relative-electron model; press `E` to compare it with the original noise path.
 - `src/nir_band.js` - realtime three-band raster NIR. Material and emitter spectra
   stay separate until Three performs component-wise lighting, then the bands

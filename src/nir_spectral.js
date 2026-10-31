@@ -169,6 +169,16 @@ export function createJhEvaluator(lut) {
       if (!data) return tent(rc, gc, bc, l);
       return evalAt(coeffs(rc, gc, bc), l);
     },
+    // One colour's reflectance as a function of wavelength: the coefficients
+    // resolve once, for dense integrals over many wavelengths.
+    reflectanceSpectrum(r, g, b) {
+      const rc = Math.min(1, Math.max(0, r));
+      const gc = Math.min(1, Math.max(0, g));
+      const bc = Math.min(1, Math.max(0, b));
+      if (!data) return (l) => tent(rc, gc, bc, l);
+      const co = coeffs(rc, gc, bc);
+      return (l) => evalAt(co, l);
+    },
     // JH shape times the unbounded linear RGB magnitude.
     emissionAt(r, g, b, l) {
       const m = Math.max(r, g, b);

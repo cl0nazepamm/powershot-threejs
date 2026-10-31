@@ -2,10 +2,10 @@
 //
 // A night yard rendered as three NIR bands (src/nir_band.js): materials and
 // lights are integrated against a Gen-3 GaAs photocathode over λ ∈ [550, 900]
-// nm, Three's raster lighting multiplies them per band, and one pass collapses
-// the bands to the LINEAR relative photocathode response that feeds the
-// PowerSHOT image-intensifier model (setInputMode("nir")) — no RGB heuristic
-// and no spectral renderer.
+// nm, Three's raster lighting multiplies them per band, and the PowerSHOT
+// image-intensifier model collapses the bands to a LINEAR relative photocathode
+// response (setInputMode("nir") + setNirBands) — no RGB heuristic and no
+// spectral renderer.
 //
 // The scene is built to prove the physics:
 //   - an 850 nm IR ILLUMINATOR is bolted to the camera (black in RGB —
@@ -44,7 +44,7 @@ const ELECTRON_PROFILE = Object.freeze({
 });
 
 let renderer, scene, camera, controls, infrared, nightshot;
-let nirBandsRT, fluxRT, collapseQuad;
+let nirBandsRT, collapseQuad;
 let irLight, mode = "nv", irOn = true;
 let electronModelOn = true;
 // imaging device consuming the flux: Gen-3 tube or Sony NightShot camcorder
@@ -132,8 +132,11 @@ function renderNirRealtime() {
     renderer.toneMapping = THREE.NoToneMapping;
     renderer.setRenderTarget(nirBandsRT);
     renderer.render(scene, camera);
-    renderer.setRenderTarget(USE_TUBE ? fluxRT : null);
-    collapseQuad.render(renderer);
+    if (!USE_TUBE) {
+      // raw flux on screen: collapse the bands without the tube
+      renderer.setRenderTarget(null);
+      collapseQuad.render(renderer);
+    }
   } finally {
     renderer.setRenderTarget(prevTarget);
     renderer.toneMapping = prevTM;
@@ -157,7 +160,6 @@ function applySize() {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   if (nirBandsRT) nirBandsRT.setSize(w, h);
-  if (fluxRT) fluxRT.setSize(w, h);
   infrared.setSize(w, h);
   if (nightshot) nightshot.setSize(w, h);
 }
@@ -211,10 +213,12 @@ async function init() {
   infrared = new InfraredPipeline(renderer);
   applyInfraredProfile(infrared, INFRARED_PRESETS[tubeProfileKey]);
   infrared.setElectronModel(ELECTRON_PROFILE);
+  infrared.setNirBands(true);
 
   nightshot = new NightshotPipeline(renderer);
   applyNightshotPreset(nightshot, NIGHTSHOT_PRESETS.nightshot_plus);
   nightshot.ir.setInputMode("nir");
+  nightshot.ir.setNirBands(true);
 
   const targetOptions = {
     type: THREE.HalfFloatType,
@@ -223,7 +227,6 @@ async function init() {
     colorSpace: THREE.NoColorSpace,
   };
   nirBandsRT = new THREE.RenderTarget(1, 1, { ...targetOptions, depthBuffer: true });
-  fluxRT = new THREE.RenderTarget(1, 1, { ...targetOptions, depthBuffer: false });
 
   const bands = texture(nirBandsRT.texture, screenUV).rgb;
   const weights = vec3(band.weights[0], band.weights[1], band.weights[2]);
@@ -284,10 +287,10 @@ async function init() {
 
     const imager = device === "nightshot" ? nightshot : infrared;
     if (mode === "nv") {
-      // raster three NIR bands, collapse to relative sensor response, then
-      // run the imager. The camera-mounted IR beam follows the rig live.
+      // raster three NIR bands; the imager collapses them to the relative
+      // sensor response. The camera-mounted IR beam follows the rig live.
       renderNirRealtime();
-      if (USE_TUBE) imager.renderTexture(fluxRT.texture, frame, { dt });
+      if (USE_TUBE) imager.renderTexture(nirBandsRT.texture, frame, { dt });
     } else {
       renderer.render(scene, camera);
     }
